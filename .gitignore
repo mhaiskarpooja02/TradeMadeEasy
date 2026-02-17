@@ -1,0 +1,180 @@
+############################
+# Python bytecode / caches
+############################
+__pycache__/
+*.py[codz]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+.hypothesis/
+
+############################
+# C extensions
+############################
+*.so
+
+############################
+# Virtual environments
+############################
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+############################
+# Build / packaging
+############################
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+############################
+# Installer logs
+############################
+pip-log.txt
+pip-delete-this-directory.txt
+
+############################
+# Test / coverage
+############################
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py.cover
+
+############################
+# Logs / runtime output
+############################
+*.log
+logs/
+output/
+
+############################
+# Databases
+############################
+*.db
+*.sqlite3
+*.sqlite3-journal
+
+############################
+# Jupyter / IPython
+############################
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+############################
+# IDEs / Editors
+############################
+.idea/
+.vscode/
+.spyderproject
+.spyproject
+.ropeproject
+.cursorignore
+.cursorindexingignore
+
+############################
+# OS files
+############################
+.DS_Store
+Thumbs.db
+
+############################
+# Ruff
+############################
+.ruff_cache/
+
+############################
+# PyInstaller
+############################
+*.manifest
+*.spec
+
+############################
+# CSV DATA (IMPORTANT)
+############################
+
+# Ignore ALL CSV files by default
+*.csv
+
+# Ignore known generated CSV patterns
+MyScreen_*.csv
+ChartInk_*.csv
+
+# Ignore CSVs in input/data folders
+input/**/*.csv
+RangeBoundInput/**/*.csv
+RangeBoundInputOld/**/*.csv
+reports/**/*.pdf
+
+############################
+# Logs & runtime outputs
+############################
+*.log
+*.txt
+logs/
+output/
+
+############################
+# CSV Allow-list (ONLY if needed)
+############################
+
+# Keep config/reference CSVs
+!config/**/*.csv
+!data/**/*.csv
+
+############################
+# JSON / secrets
+############################
+credentials.json
+*.secret.json
+
+############################
+# PDM / Poetry / UV / Pixi
+############################
+.pdm-python
+.pdm-build/
+.pixi/
+__pypackages__/
+
+############################
+# Sphinx / Docs
+############################
+docs/_build/
+site/
+
+############################
+# Misc
+############################
+.installed.cfg
+.pybuilder/
+target/
+.abstra/
+.pypirc

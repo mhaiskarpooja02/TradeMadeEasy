@@ -1,0 +1,27 @@
+{
+    "ema_short": 20,
+    "ema_long": 50,
+    "candles_above": 2,
+    "lookback_days": 120,
+    "RangeBoundlookback_days": 360,
+    "default_interval": "ONE_DAY",
+    "rsi_period": 14,
+    "rsi_overbought": 70,
+    "rsi_oversold": 30,
+    "atr_period": 14,
+    "atr_mult": 1.5,
+    "vol_period": 20,
+    "full_confirm_vol_mult": 1.5,
+    "email_settings": {
+        "emailenabeled": true,
+        "receiver_emails": [
+            "omkar.mhaiskar@gmail.com",
+            "Prasannaxtr@gmail.com",
+            "Anupjoshi06@gmail.com",
+            "amit.upshankar@gmail.com",
+            "arvind.inamdar167@gmail.com"
+        ],
+        "subject_template": "Swing Trade Report \u00e2\u20ac\u201d {date} by Autotrade",
+        "body_template": "Swing Trade Report \u00e2\u20ac\u201d {date}\n {signal_count} Buy Signal(s): {symbols}\n\nPlease find attached today's signal report."
+    }
+}

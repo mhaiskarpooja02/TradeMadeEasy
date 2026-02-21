@@ -1,12 +1,20 @@
 from abc import ABC, abstractmethod
-from core.tradefriend_order_models import TradeFriendOrderRequest
+from models.tradefriend_order_models import TradeFriendOrderRequest
+from models.tradefriend_execution_result import TradeFriendExecutionResult
+
 
 class TradeFriendBrokerAdapter(ABC):
+    """
+    Base contract for all broker adapters.
+    Adapters MUST NOT touch DB or audit.
+    """
 
     @abstractmethod
-    def place_order(self, order: TradeFriendOrderRequest) -> bool:
+    def place_order(
+        self,
+        order: TradeFriendOrderRequest
+    ) -> TradeFriendExecutionResult:
         """
-        Places order with broker.
-        Must return True ONLY if broker confirms acceptance.
+        Execute broker order and return structured result.
         """
-        pass
+        raise NotImplementedError

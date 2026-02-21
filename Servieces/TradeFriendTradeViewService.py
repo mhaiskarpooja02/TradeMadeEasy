@@ -8,18 +8,10 @@ logger = get_logger(__name__)
 class TradeFriendTradeViewService:
 
     # ==================================================
-    # ACTIVE TRADE ROW (Dashboard)
+    # ACTIVE TRADE ROW (Pure Transformer)
     # ==================================================
     @staticmethod
-   
-    def active_trade_row(trade, ltp):
-        logger.info(
-        "📊 ACTIVE_TRADE_ROW | symbol=%s | qty=%s | remaining_qty=%s | status=%s",
-        trade.get("symbol"),
-        trade.get("initial_qty"),
-        trade.get("remaining_qty"),
-        trade.get("status")
-    )
+    def active_trade_row(trade: dict, ltp):
 
         try:
             symbol = trade.get("symbol")
@@ -28,51 +20,38 @@ class TradeFriendTradeViewService:
             sl = float(trade.get("sl", 0))
             target = float(trade.get("target", 0))
 
-            # 🔑 Quantities
-            init_qty = int(
-                trade.get("initial_qty")
-                or trade.get("qty")
-                or 0
-            )
-            rem_qty = int(
-                trade.get("remaining_qty", init_qty)
-            )
+            # Quantities
+            init_qty = int(trade.get("initial_qty") or trade.get("qty") or 0)
+            rem_qty = int(trade.get("remaining_qty", init_qty))
 
-            # -----------------------
-            # Derived status (UI truth)
-            # -----------------------
+            # Derived status
             status = trade.get("status", "OPEN")
             if rem_qty <= 0:
                 status = "CLOSED"
             elif rem_qty < init_qty:
                 status = "PARTIAL"
 
-            # -----------------------
             # Risk & PnL
-            # -----------------------
             risk_per_unit = abs(entry - sl)
+
             pnl = (
                 round((ltp - entry) * rem_qty, 2)
-                if ltp and rem_qty > 0
+                if isinstance(ltp, (int, float)) and rem_qty > 0
                 else "--"
             )
 
             r_mult = (
                 round((ltp - entry) / risk_per_unit, 2)
-                if ltp and risk_per_unit > 0
+                if isinstance(ltp, (int, float)) and risk_per_unit > 0
                 else "--"
             )
 
-            # -----------------------
             # Progress to target
-            # -----------------------
             progress = "--"
-            if ltp and target != entry:
+            if isinstance(ltp, (int, float)) and target != entry:
                 progress = f"{round(((ltp - entry) / (target - entry)) * 100, 1)}%"
 
-            # -----------------------
             # Row color tag
-            # -----------------------
             tag = ""
             if isinstance(pnl, (int, float)):
                 if pnl > 0:
@@ -84,11 +63,11 @@ class TradeFriendTradeViewService:
                 "values": (
                     symbol,
                     round(entry, 2),
-                    ltp or "--",
+                    ltp if ltp else "--",
                     round(sl, 2),
                     round(target, 2),
-                    init_qty,     # ✅ ADD THIS
-                    rem_qty,          # ✅ show remaining qty
+                    init_qty,
+                    rem_qty,
                     pnl,
                     r_mult,
                     progress,
@@ -103,12 +82,12 @@ class TradeFriendTradeViewService:
             )
             return None
 
-
     # ==================================================
     # HISTORY TRADE ROW
     # ==================================================
     @staticmethod
-    def history_trade_row(trade):
+    def history_trade_row(trade: dict):
+
         try:
             entry = float(trade["entry"])
             exit_price = float(trade["exit_price"])
@@ -118,7 +97,7 @@ class TradeFriendTradeViewService:
             risk = abs(entry - float(trade["sl"])) or 1
             r_mult = round((exit_price - entry) / risk, 2)
 
-            row = (
+            return (
                 trade["symbol"],
                 round(entry, 2),
                 round(exit_price, 2),
@@ -129,14 +108,7 @@ class TradeFriendTradeViewService:
                 trade["closed_on"]
             )
 
-            logger.debug(
-                f"History row built | {trade['symbol']} | "
-                f"Exit={exit_price} | PnL={pnl} | R={r_mult}"
-            )
-
-            return row
-
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to build history trade row | trade={trade}"
             )

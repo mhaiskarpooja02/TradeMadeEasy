@@ -1,7 +1,7 @@
 from utils.logger import get_logger
 from core.TradeFriendPositionSizer import TradeFriendPositionSizer
 from core.TradeFriendRiskManager import TradeFriendRiskManager
-from const.PlanStatus import PlanStatus
+from const.TradeFriendPlanStatus import PlanStatus
 
 logger = get_logger(__name__)
 

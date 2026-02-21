@@ -1,8 +1,9 @@
 # Servieces/TradeFriendExitOrderService.py
 
-import logging
 from datetime import datetime
 from const.TradeFriendPlanStatus import TradeStatus
+
+from utils.logger import get_order_logger
 
 from db.TradeFriendTradeRepo import TradeFriendTradeRepo
 from db.TradeFriendTradeHistoryRepo import TradeFriendTradeHistoryRepo
@@ -14,12 +15,15 @@ from db.TradeFriendRealizedPnLRepo import TradeFriendRealizedPnLRepo
 from brokers.tradefriend_dhan_order_adapter import TradeFriendDhanOrderAdapter
 from brokers.tradefriend_angel_order_adapter import TradeFriendAngelOrderAdapter
 
-logger = logging.getLogger(__name__)
+logger = get_order_logger()
 
 
 class TradeFriendExitOrderService:
 
     def __init__(self):
+
+        logger.debug("🔧 EXIT OMS INITIALIZING")
+
         self.trade_repo = TradeFriendTradeRepo()
         self.history_repo = TradeFriendTradeHistoryRepo()
         self.broker_trade_repo = TradeFriendBrokerTradeRepo()
@@ -31,6 +35,8 @@ class TradeFriendExitOrderService:
             "DHAN": TradeFriendDhanOrderAdapter(),
             "ANGEL": TradeFriendAngelOrderAdapter()
         }
+
+        logger.debug(f"Exit brokers available → {list(self.brokers.keys())}")
 
     # ==================================================
     # PUBLIC ENTRY
@@ -45,27 +51,34 @@ class TradeFriendExitOrderService:
     ) -> bool:
 
         logger.info(
-            f"🚪 EXIT OMS | trade_id={trade_id} | symbol={symbol} | qty={exit_qty}"
+            f"🚪 EXIT START | trade_id={trade_id} | symbol={symbol} | qty={exit_qty}"
         )
 
         trade = self.trade_repo.fetch_by_id(trade_id)
+
         if not trade:
-            logger.error(f"EXIT OMS → Trade not found: {trade_id}")
+            logger.error(f"❌ EXIT → Trade not found | trade_id={trade_id}")
             return False
 
         status = trade["status"]
         remaining_qty = int(trade["remaining_qty"])
 
+        logger.debug(
+            f"Trade loaded | status={status} | remaining_qty={remaining_qty}"
+        )
+
         # ===============================
         # STATE GUARD
         # ===============================
         if status in ("CLOSED", "INVALID", "EXIT_IN_PROGRESS"):
-            logger.warning(f"⏭ EXIT BLOCKED | Trade={trade_id} | Status={status}")
+            logger.warning(
+                f"⏭ EXIT BLOCKED | trade_id={trade_id} | status={status}"
+            )
             return False
 
         if exit_qty <= 0 or exit_qty > remaining_qty:
             logger.error(
-                f"{symbol} → Invalid exit qty {exit_qty} (remaining {remaining_qty})"
+                f"❌ INVALID EXIT QTY | symbol={symbol} | exit_qty={exit_qty} | remaining={remaining_qty}"
             )
             return False
 
@@ -80,6 +93,8 @@ class TradeFriendExitOrderService:
 
         cfg = self.config_repo.get()
         order_mode = cfg["order_mode"]
+
+        logger.info(f"Exit mode resolved → {order_mode}")
 
         request_payload = {
             "symbol": symbol,
@@ -96,6 +111,10 @@ class TradeFriendExitOrderService:
         previous_status = status
         self.trade_repo.update_status(trade_id, "EXIT_IN_PROGRESS")
 
+        logger.debug(
+            f"Status updated → EXIT_IN_PROGRESS | previous={previous_status}"
+        )
+
         audit_id = self.audit_repo.log_attempt(
             trade_id=trade_id,
             symbol=symbol,
@@ -109,12 +128,17 @@ class TradeFriendExitOrderService:
             request_payload=request_payload
         )
 
+        logger.debug(f"Audit attempt created | audit_id={audit_id}")
+
         try:
 
             # ==================================================
             # PAPER MODE
             # ==================================================
             if order_mode == "PAPER":
+
+                logger.info("📄 Executing PAPER EXIT")
+
                 synthetic_broker_id = (
                     f"PAPER-EXIT-{trade_id}-{int(datetime.now().timestamp())}"
                 )
@@ -132,10 +156,11 @@ class TradeFriendExitOrderService:
                     audit_id=audit_id,
                     status="SUCCESS",
                     resolved_id=synthetic_broker_id,
-                    response_payload={
-                        "mode": "PAPER",
-                        "broker_order_id": synthetic_broker_id
-                    }
+                    response_payload={"mode": "PAPER"}
+                )
+
+                logger.info(
+                    f"✅ PAPER EXIT SUCCESS | trade_id={trade_id}"
                 )
 
                 return True
@@ -143,12 +168,18 @@ class TradeFriendExitOrderService:
             # ==================================================
             # LIVE MODE
             # ==================================================
+            logger.info("🌐 Executing LIVE EXIT")
+
             success, broker_order_id, broker_response = \
                 self._execute_live_exit(
                     trade_id, symbol, exit_qty, side, ltp
                 )
 
             if not success:
+                logger.error(
+                    f"❌ LIVE EXIT FAILED | trade_id={trade_id}"
+                )
+
                 self.trade_repo.update_status(trade_id, previous_status)
 
                 self._finalize_audit(
@@ -175,17 +206,21 @@ class TradeFriendExitOrderService:
                 response_payload=broker_response
             )
 
+            logger.info(
+                f"✅ LIVE EXIT SUCCESS | trade_id={trade_id} | broker_order_id={broker_order_id}"
+            )
+
             return True
 
-        except Exception as e:
-            logger.exception(f"EXIT OMS CRASH | Trade={trade_id}")
+        except Exception:
+            logger.exception(f"💥 EXIT OMS CRASH | trade_id={trade_id}")
 
             self.trade_repo.update_status(trade_id, previous_status)
 
             self._finalize_audit(
                 audit_id=audit_id,
                 status="FAILED",
-                error_message=str(e)
+                error_message="Unexpected crash"
             )
 
             return False
@@ -195,40 +230,64 @@ class TradeFriendExitOrderService:
     # ==================================================
     def _execute_live_exit(self, trade_id, symbol, qty, side, price):
 
+        logger.debug(f"Fetching active broker positions | trade_id={trade_id}")
+
         broker_trades = self.broker_trade_repo.fetch_active_positions(trade_id)
 
         for bt in broker_trades or []:
-            adapter = self.brokers.get(bt["broker"])
+
+            broker_name = bt["broker"]
+            adapter = self.brokers.get(broker_name)
+
+            logger.debug(f"Trying broker → {broker_name}")
+
             if not adapter:
+                logger.warning(f"No adapter found for broker → {broker_name}")
                 continue
 
-            result = adapter.place_order(
-                symbol=symbol,
-                qty=qty,
-                side=side
-            )
-
-            if result and result.get("status") == "SUCCESS":
-
-                broker_order_id = result.get("broker_order_id")
-
-                self.broker_trade_repo.insert_broker_trade(
-                    trade_id=trade_id,
-                    broker=bt["broker"],
-                    symbol=symbol,
-                    side="EXIT",
-                    qty=qty,
-                    price=price,
-                    broker_order_id=broker_order_id,
-                    active=False
+            try:
+                logger.debug(
+                    f"Calling {broker_name}.place_order(symbol={symbol}, qty={qty}, side={side})"
                 )
 
-                return True, broker_order_id, result
+                result = adapter.place_order(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side
+                )
+
+                logger.debug(f"{broker_name} response → {result}")
+
+                if result and result.get("status") == "SUCCESS":
+
+                    broker_order_id = result.get("broker_order_id")
+
+                    self.broker_trade_repo.insert_broker_trade(
+                        trade_id=trade_id,
+                        broker=broker_name,
+                        symbol=symbol,
+                        side="EXIT",
+                        qty=qty,
+                        price=price,
+                        broker_order_id=broker_order_id,
+                        active=False
+                    )
+
+                    logger.info(
+                        f"{broker_name} EXIT SUCCESS | order_id={broker_order_id}"
+                    )
+
+                    return True, broker_order_id, result
+
+            except Exception:
+                logger.exception(
+                    f"{broker_name} EXIT EXECUTION FAILED | trade_id={trade_id}"
+                )
 
         return False, None, None
 
     # ==================================================
-    # FINALIZER (TRADE MUTATION)
+    # FINALIZER
     # ==================================================
     def _finalize_exit(
         self,
@@ -245,9 +304,10 @@ class TradeFriendExitOrderService:
         entry_price = float(trade["entry"])
         remaining = int(trade["remaining_qty"])
 
-        # ===============================
-        # PARTIAL EXIT
-        # ===============================
+        logger.debug(
+            f"Finalizing exit | trade_id={trade_id} | exit_qty={exit_qty} | remaining={remaining}"
+        )
+
         if exit_qty < remaining:
 
             new_remaining = self.trade_repo.mark_partial_exit(
@@ -274,13 +334,11 @@ class TradeFriendExitOrderService:
 
             logger.info(
                 f"🟡 PARTIAL EXIT FINALIZED | {symbol} | "
-                f"Qty={exit_qty} | Remaining={new_remaining} | Mode={order_mode}"
+                f"Qty={exit_qty} | Remaining={new_remaining}"
             )
             return
 
-        # ===============================
         # FINAL EXIT
-        # ===============================
         self.trade_repo.close_and_archive(
             trade_id,
             exit_price,
@@ -300,8 +358,7 @@ class TradeFriendExitOrderService:
         )
 
         logger.info(
-            f"🔴 FINAL EXIT ARCHIVED | {symbol} | "
-            f"Reason={exit_reason} | Mode={order_mode}"
+            f"🔴 FINAL EXIT ARCHIVED | {symbol} | Reason={exit_reason}"
         )
 
     # ==================================================
@@ -315,10 +372,13 @@ class TradeFriendExitOrderService:
         response_payload: dict | None = None,
         error_message: str | None = None
     ):
+        logger.debug(
+            f"Finalizing audit | audit_id={audit_id} | status={status}"
+        )
+
         self.audit_repo.log_result(
             audit_id=audit_id,
             status=status,
-            resolved_id=resolved_id,
             response_payload=response_payload,
             error_message=error_message
         )

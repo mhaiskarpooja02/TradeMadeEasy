@@ -69,17 +69,19 @@ class TradeFriendTradeRepo:
         self.conn.commit()
 
     # -------------------------------------------------
-    # CREATE TRADE (LOCK CAPITAL)
-    # -------------------------------------------------
-    # -------------------------------------------------
-    # CREATE TRADE (LOCK CAPITAL)
+    # CREATE TRADE (NO CAPITAL LOCKING HERE)
     # -------------------------------------------------
     def save_trade(self, trade: dict) -> int:
+        """
+        Creates a new trade record.
+    
+        IMPORTANT:
+        - This method does NOT adjust capital.
+        - Capital is deducted only after confirmed broker fill.
+        """
+    
         position_value = trade["entry"] * trade["qty"]
         risk_amount = abs(trade["entry"] - trade["sl"]) * trade["qty"]
-    
-        # 🔒 Lock capital first
-        self.settings_repo.adjust_available_swing_capital(-position_value)
     
         try:
             self.cursor.execute("""
@@ -113,18 +115,18 @@ class TradeFriendTradeRepo:
                 trade["planned_entry"],
                 trade["entry"],
                 trade["sl"],
-                trade["sl"],                     # trailing_sl
+                trade["sl"],  # trailing_sl initially same as SL
                 trade["target"],
     
                 trade["qty"],
-                trade["qty"],                    # initial_qty
-                trade["qty"],                    # remaining_qty
+                trade["qty"],  # initial_qty
+                trade["qty"],  # remaining_qty
     
                 position_value,
                 risk_amount,
                 trade.get("confidence", 0),
                 trade.get("status", "READY"),
-                trade.get("hold_mode", 0),       # ✅ FIXED (was missing)
+                trade.get("hold_mode", 0),
                 date.today().isoformat(),
                 datetime.now().isoformat()
             ))
@@ -132,10 +134,10 @@ class TradeFriendTradeRepo:
             self.conn.commit()
             return self.cursor.lastrowid
     
-        except Exception:
-            # 🔁 rollback locked capital if insert fails
-            self.settings_repo.adjust_available_swing_capital(+position_value)
-            raise
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
 
     # -------------------------------------------------
     # FETCH

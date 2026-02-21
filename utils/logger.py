@@ -154,6 +154,30 @@ def get_order_logger():
     return logger
 
 
+def get_brokerorder_logger():
+    """
+    Dedicated logger for order placement.
+    - File only
+    - DEBUG level
+    """
+    logger = logging.getLogger("broker_orders")
+    logger.setLevel(logging.DEBUG)
+
+    if not logger.handlers:
+
+        log_dir = get_today_log_dir()
+        log_file = os.path.join(log_dir, "brokerorders.log")
+
+        fh = _build_file_handler(log_file, logging.DEBUG)
+
+        logger.addHandler(fh)
+        logger.propagate = False
+
+        _wrap_logger_methods(logger)
+
+    return logger
+
+
 # ---------------------------------------------------------------------
 # Monitor logger (FILE ONLY)
 # ---------------------------------------------------------------------

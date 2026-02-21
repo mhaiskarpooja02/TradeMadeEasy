@@ -147,7 +147,7 @@ class AngelClient:
             try:
                 to_date = datetime.now()
                 from_date = to_date - timedelta(days=days)
-                logger.info(f"For ({token}) Date Range : from_date {from_date}  to_date {to_date}.")
+                
                 params = {
                     "exchange": "NSE",
                     "symboltoken": str(token),

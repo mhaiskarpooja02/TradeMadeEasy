@@ -48,12 +48,12 @@ class TradeFriendDashboard(ttk.Frame):
         self._watchlist_rows_cache = []
         self._active_trades_cache = []
 
-        # ✅ BACKGROUND SCHEDULER
-        self.scheduler = TradeFriendScheduler(
-            manager=self.manager,
-            trade_mode=self.trade_mode
-        )
-        self.scheduler.start()
+        # # ✅ BACKGROUND SCHEDULER
+        # self.scheduler = TradeFriendScheduler(
+        #     manager=self.manager,
+        #     trade_mode=self.trade_mode
+        # )
+        # self.scheduler.start()
 
         # 🎨 BUILD UI (uses search vars)
         self._build_ui()

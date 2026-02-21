@@ -70,219 +70,247 @@ class TradeFriendSwingTriggerEngine:
 
         logger.info("✅ Swing Trigger Engine completed")
 
+    
     # =========================
     # PROCESS SINGLE TRADE
     # =========================
     def _process_trade(self, trade: dict) -> dict | None:
-       trade_id = trade["id"]
-       symbol = trade["symbol"]
-       plan_id = trade.get("swing_plan_id")
-    
-       if trade.get("status") != TradeStatus.READY.value:
-           logger.debug(f"{symbol} skipped — not READY")
-           return None
-    
-       # ----------------------------
-       # DUPLICATE ENTRY LOCK
-       # ----------------------------
-       locked = self.trade_repo.promote_if_ready(
-           trade_id=trade_id,
-           from_status=TradeStatus.READY.value,
-           to_status=TradeStatus.ENTRY_IN_PROGRESS.value
-       )
-       if not locked:
-           logger.info(f"{symbol} skipped — already picked by another engine")
-           return None
-       logger.info(f"🔐 LOCK ACQUIRED | {symbol}")
-    
-       planned_entry = float(trade["planned_entry"])
-       initial_qty = int(trade["initial_qty"])
-       remaining_qty = int(trade["remaining_qty"])
-       filled_qty = initial_qty - remaining_qty
-    
-       if not plan_id:
-           logger.error(f"{symbol} missing swing_plan_id")
-           return None
-    
-       # ----------------------------
-       # BROKER COOLDOWN
-       # ----------------------------
-       self._wait_for_broker()
-    
-       # ----------------------------
-       # FETCH LTP
-       # ----------------------------
-       ltp = self.provider.get_ltp_byLtp(symbol)
-       if not ltp or ltp <= 0:
-           logger.warning(f"{symbol} invalid LTP")
-           self._rollback_to_ready(trade_id)
-           return None
-    
-       tolerance = planned_entry * ENTRY_TOLERANCE
-    
-       # ----------------------------
-       # ENTRY WINDOW VALIDATION
-       # ----------------------------
-       if ltp < planned_entry:
-           logger.info(f"{symbol} below planned entry ({ltp} < {planned_entry})")
-           self._rollback_to_ready(trade_id)
-           return None
-    
-       if ltp > planned_entry + tolerance:
-           reason = f"Missed entry | LTP={ltp}"
-           logger.warning(f"{symbol} {reason}")
-           self.trade_repo.invalidate_trade(trade_id, reason=reason, status=TradeStatus.INVALID.value)
-           return None
-    
-       logger.info(f"🚀 ENTRY WINDOW HIT | {symbol} | LTP={ltp}")
-    
-       # ----------------------------
-       # DECIDE QTY
-       # ----------------------------
-       if remaining_qty <= 0:
-           self._rollback_to_ready(trade_id)
-           return None
-    
-       qty_to_place = min(PARTIAL_ENTRY_QTY, remaining_qty) if PARTIAL_ENTRY_ENABLED and filled_qty == 0 else remaining_qty
-    
-       # ----------------------------
-       # CHECK CAPITAL BEFORE RESERVING
-       # ----------------------------
-       available_capital = self.trade_repo.settings_repo.fetch()["available_swing_capital"]
-       required_capital = planned_entry * qty_to_place
-    
-       if required_capital > available_capital:
-           logger.warning(f"Insufficient capital for {symbol} | required={required_capital} | available={available_capital}")
-           self._rollback_to_ready(trade_id)
-           return None
-    
-       # ----------------------------
-       # RESERVE CAPITAL
-       # ----------------------------
-       self.trade_repo.settings_repo.adjust_available_swing_capital(-required_capital)
-       logger.info(f"💰 Reserved capital {required_capital} for {symbol}")
-    
-       # ----------------------------
-       # PLACE ORDER (Paper / Live)
-       # ----------------------------
-       executions = self.oms.place_entry_order(
-           trade_id=trade_id,
-           symbol=symbol,
-           qty=qty_to_place,
-           side="BUY",
-           reference_price=ltp
-       )
-    
-       if not executions:
-           # Rollback reserved capital if order fails
-           self.trade_repo.settings_repo.adjust_available_swing_capital(required_capital)
-           logger.warning(f"{symbol} OMS returned no executions | Capital rolled back")
-           self._rollback_to_ready(trade_id)
-           return None
-    
-       # ----------------------------
-       # PROCESS EXECUTIONS
-       # ----------------------------
-       total_filled = 0
-       weighted_price = 0.0
-       for ex in executions:
-           qty = ex["filled_qty"]
-           price = ex["avg_price"]
-           total_filled += qty
-           weighted_price += qty * price
-    
-           # Broker repo logging
-           self.broker_repo.insert_broker_trade(
-               trade_id=trade_id,
-               broker=ex["broker"],
-               order_mode="PAPER" if self.paper_trade else "LIVE",
-               symbol=symbol,
-               leg_type="ENTRY",
-               side="BUY",
-               qty=qty,
-               broker_order_id=ex["broker_order_id"],
-               request_payload=ex.get("request_payload"),
-           )
-    
-           order_logger.info(f"[ENTRY] {symbol} | {ex['broker']} | qty={qty} | price={price}")
-    
-       avg_entry_price = round(weighted_price / total_filled, 2)
-    
-       # ----------------------------
-       # ADJUST CAPITAL FOR UNFILLED PORTION
-       # ----------------------------
-       unfilled_qty = qty_to_place - total_filled
-       if unfilled_qty > 0:
-           released_capital = planned_entry * unfilled_qty
-           self.trade_repo.settings_repo.adjust_available_swing_capital(released_capital)
-           logger.info(f"💸 Released unfilled capital {released_capital} for {symbol}")
-    
-       # ----------------------------
-       # UPDATE TRADE FILL
-       # ----------------------------
-       self.trade_repo.update_entry_fill(trade_id=trade_id, fill_qty=total_filled, fill_price=avg_entry_price)
-       new_filled_qty = filled_qty + total_filled
-    
-       # ----------------------------
-       # AUDIT LOG (OPTIONAL)
-       # ----------------------------
-       for ex in executions:
-           self.audit_repo.log_attempt(
-               trade_id=trade_id,
-               symbol=symbol,
-               broker=ex["broker"],
-               order_mode="PAPER" if self.paper_trade else "LIVE",
-               side="BUY",
-               qty=ex["filled_qty"],
-               request_payload=ex.get("request_payload")
-           )
-    
-       # ----------------------------
-       # FULL ENTRY
-       # ----------------------------
-       if new_filled_qty >= initial_qty:
-           self.trade_repo.mark_open(
-               trade_id=trade_id,
-               avg_entry=avg_entry_price,
-               entry_day=date.today().isoformat(),
-               status=TradeStatus.OPEN.value
-           )
-           logger.info(f"✅ ENTRY COMPLETE | {symbol}")
-           return {
-               "trade_id": trade_id,
-               "plan_id": plan_id,
-               "symbol": symbol,
-               "status": TradeStatus.OPEN,
-               "filled_qty": new_filled_qty
-           }
-    
-       # ----------------------------
-       # PARTIAL ENTRY
-       # ----------------------------
-       self.trade_repo.update_status(trade_id, TradeStatus.PARTIAL.value)
-       logger.info(f"➗ PARTIAL ENTRY | {symbol}")
-       return {
-           "trade_id": trade_id,
-           "plan_id": plan_id,
-           "symbol": symbol,
-           "status": TradeStatus.PARTIAL,
-           "filled_qty": new_filled_qty
-       }
 
+        trade_id = trade["id"]
+        symbol = trade["symbol"]
+        plan_id = trade.get("swing_plan_id")
+
+        if trade.get("status") != TradeStatus.READY.value:
+            logger.debug(f"{symbol} skipped — not READY")
+            return None
+
+        # ----------------------------
+        # DUPLICATE ENTRY LOCK
+        # ----------------------------
+        locked = self.trade_repo.promote_if_ready(
+            trade_id=trade_id,
+            from_status=TradeStatus.READY.value,
+            to_status=TradeStatus.ENTRY_IN_PROGRESS.value
+        )
+        if not locked:
+            logger.info(f"{symbol} skipped — already picked by another engine")
+            return None
+
+        logger.info(f"🔐 LOCK ACQUIRED | {symbol}")
+
+        planned_entry = float(trade["planned_entry"])
+        initial_qty = int(trade["initial_qty"])
+        remaining_qty = int(trade["remaining_qty"])
+        filled_qty = initial_qty - remaining_qty
+
+        if not plan_id:
+            logger.error(f"{symbol} missing swing_plan_id")
+            self._rollback_to_ready(trade_id)
+            return None
+
+        # ----------------------------
+        # BROKER COOLDOWN
+        # ----------------------------
+        self._wait_for_broker()
+
+        # ----------------------------
+        # FETCH LTP
+        # ----------------------------
+        ltp = self.provider.get_ltp_byLtp(symbol)
+        if not ltp or ltp <= 0:
+            logger.warning(f"{symbol} invalid LTP")
+            self._rollback_to_ready(trade_id)
+            return None
+
+        tolerance = planned_entry * ENTRY_TOLERANCE
+
+        # ----------------------------
+        # ENTRY WINDOW VALIDATION
+        # ----------------------------
+        if ltp < planned_entry:
+            logger.info(f"{symbol} below planned entry ({ltp} < {planned_entry})")
+            self._rollback_to_ready(trade_id)
+            return None
+
+        if ltp > planned_entry + tolerance:
+            reason = f"Missed entry | LTP={ltp}"
+            logger.warning(f"{symbol} {reason}")
+            self.trade_repo.invalidate_trade(
+                trade_id,
+                reason=reason,
+                status=TradeStatus.INVALID.value
+            )
+            return None
+
+        logger.info(f"🚀 ENTRY WINDOW HIT | {symbol} | LTP={ltp}")
+
+        # ----------------------------
+        # DECIDE QTY
+        # ----------------------------
+        if remaining_qty <= 0:
+            self._rollback_to_ready(trade_id)
+            return None
+
+        qty_to_place = (
+            min(PARTIAL_ENTRY_QTY, remaining_qty)
+            if PARTIAL_ENTRY_ENABLED and filled_qty == 0
+            else remaining_qty
+        )
+
+        # ----------------------------
+        # CAPITAL VALIDATION ONLY
+        # ----------------------------
+        capital_snapshot = self.trade_repo.settings_repo.fetch()
+        available_capital = capital_snapshot["available_swing_capital"]
+        required_capital = planned_entry * qty_to_place
+
+        logger.info(
+            f"💰 CAPITAL CHECK | {symbol} | "
+            f"Available={available_capital} | Required={required_capital}"
+        )
+
+        if required_capital > available_capital:
+            logger.warning(
+                f"❌ Insufficient capital | {symbol} | "
+                f"Required={required_capital} | Available={available_capital}"
+            )
+            self._rollback_to_ready(trade_id)
+            return None
+
+        # ----------------------------
+        # PLACE ORDER (Paper / Live)
+        # ----------------------------
+        executions = self.oms.place_entry_order(
+            trade_id=trade_id,
+            symbol=symbol,
+            qty=qty_to_place,
+            side="BUY",
+            price=ltp
+        )
+
+        if not executions:
+            logger.warning(f"{symbol} OMS returned no executions")
+            self._rollback_to_ready(trade_id)
+            return None
+
+        # ----------------------------
+        # PROCESS EXECUTIONS
+        # ----------------------------
+        total_filled = 0
+        weighted_price = 0.0
+
+        for ex in executions:
+            qty = ex["filled_qty"]
+            price = ex["avg_price"]
+
+            total_filled += qty
+            weighted_price += qty * price
+
+            broker_trade_id = self.broker_repo.insert_broker_trade(
+                trade_id=trade_id,
+                broker=ex["broker"],
+                order_mode="PAPER" if self.paper_trade else "LIVE",
+                symbol=symbol,
+                leg_type="ENTRY",
+                side="BUY",
+                qty=qty,
+                exchange=ex.get("exchange"),
+                product=ex.get("product"),
+                order_type=ex.get("order_type"),
+                request_payload=ex.get("request_payload"),
+            )
+
+            self.broker_repo.mark_order_success(
+                broker_trade_id=broker_trade_id,
+                broker_order_id=ex["broker_order_id"],
+                response_payload=ex.get("response_payload"),
+            )
+
+            order_logger.info(
+                f"[ENTRY] {symbol} | {ex['broker']} | qty={qty} | price={price}"
+            )
+
+        if total_filled <= 0:
+            logger.warning(f"{symbol} no fills received")
+            self._rollback_to_ready(trade_id)
+            return None
+
+        avg_entry_price = round(weighted_price / total_filled, 2)
+
+        # ----------------------------
+        # DEDUCT ACTUAL USED CAPITAL
+        # ----------------------------
+        actual_used_capital = avg_entry_price * total_filled
+
+        before_capital = self.trade_repo.settings_repo.fetch()["available_swing_capital"]
+
+        self.trade_repo.settings_repo.adjust_available_swing_capital(-actual_used_capital)
+
+        after_capital = self.trade_repo.settings_repo.fetch()["available_swing_capital"]
+
+        logger.info(
+            f"💸 CAPITAL ALLOCATED | {symbol} | "
+            f"Used={actual_used_capital} | "
+            f"Before={before_capital} | After={after_capital}"
+        )
+
+        # ----------------------------
+        # UPDATE TRADE FILL
+        # ----------------------------
+        self.trade_repo.update_entry_fill(
+            trade_id=trade_id,
+            fill_qty=total_filled,
+            fill_price=avg_entry_price
+        )
+
+        new_filled_qty = filled_qty + total_filled
+
+        # ----------------------------
+        # FULL ENTRY
+        # ----------------------------
+        if new_filled_qty >= initial_qty:
+            self.trade_repo.mark_open(
+                trade_id=trade_id,
+                avg_entry=avg_entry_price,
+                entry_day=date.today().isoformat(),
+                status=TradeStatus.OPEN.value
+            )
+
+            logger.info(f"✅ ENTRY COMPLETE | {symbol}")
+
+            return {
+                "trade_id": trade_id,
+                "plan_id": plan_id,
+                "symbol": symbol,
+                "status": TradeStatus.OPEN,
+                "filled_qty": new_filled_qty
+            }
+
+        # ----------------------------
+        # PARTIAL ENTRY
+        # ----------------------------
+        self.trade_repo.update_status(trade_id, TradeStatus.PARTIAL.value)
+
+        logger.info(f"➗ PARTIAL ENTRY | {symbol}")
+
+        return {
+            "trade_id": trade_id,
+            "plan_id": plan_id,
+            "symbol": symbol,
+            "status": TradeStatus.PARTIAL,
+            "filled_qty": new_filled_qty
+        }
+
+  
+    
     # =========================
     # ROLLBACK TO READY
     # =========================
     def _rollback_to_ready(self, trade_id: int):
-        trade = self.trade_repo.fetch_by_id(trade_id)
-        if trade:
-            # Refund reserved capital for the trade
-            planned_entry = float(trade["planned_entry"])
-            remaining_qty = int(trade["remaining_qty"])
-            refund = planned_entry * remaining_qty
-            self.trade_repo.settings_repo.adjust_available_swing_capital(refund)
-            logger.info(f"💸 Refunded capital {refund} for trade_id={trade_id}")
-
         self.trade_repo.update_status(trade_id, TradeStatus.READY.value)
+        logger.info(
+            f"↩ Rolled back trade_id={trade_id} to READY (No capital movement)"
+        )
 
     # =========================
     # BROKER COOLDOWN

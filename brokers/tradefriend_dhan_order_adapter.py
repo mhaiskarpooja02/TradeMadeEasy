@@ -1,19 +1,15 @@
 import logging
 
+from brokers.tradefriend_broker_adapter import TradeFriendBrokerAdapter
 from brokers.dhan_client import DhanClient
+from models.tradefriend_order_models import TradeFriendOrderRequest
+from models.tradefriend_execution_result import TradeFriendExecutionResult
 from db.TradeFriendDhanInstrumentRepo import TradeFriendDhanInstrumentRepo
-from db.TradeFriendOrderAuditRepo import TradeFriendOrderAuditRepo
 
 logger = logging.getLogger(__name__)
 
 
-class TradeFriendDhanOrderAdapter:
-    """
-    PURPOSE:
-    - Place LIVE orders via Dhan
-    - Resolve security_id via TradeFriendDhanInstrumentRepo
-    - Record every attempt in TradeFriendOrderAuditRepo
-    """
+class TradeFriendDhanOrderAdapter(TradeFriendBrokerAdapter):
 
     BROKER_NAME = "DHAN"
     EXCHANGE = "NSE_EQ"
@@ -23,119 +19,70 @@ class TradeFriendDhanOrderAdapter:
     def __init__(self):
         self.client = DhanClient()
         self.instrument_repo = TradeFriendDhanInstrumentRepo()
-        self.audit_repo = TradeFriendOrderAuditRepo()
 
     # --------------------------------------------------
-    # PLACE ORDER (OMS ENTRY POINT)
+    # PLACE ORDER
     # --------------------------------------------------
     def place_order(
         self,
-        trade_id: int,
-        symbol: str,
-        qty: int,
-        side: str = "BUY",
-        tag: str = None,
-        order_mode: str = "LIVE"
-    ) -> bool:
-        """
-        OMS-compatible execution.
+        order: TradeFriendOrderRequest
+    ) -> TradeFriendExecutionResult:
 
-        Args:
-            trade_id (int): swing_trade id
-            symbol (str): SBIN-EQ
-            qty (int): quantity
-            side (str): BUY (only)
-            tag (str): correlation tag
-            order_mode (str): LIVE / PAPER
-        """
+        if order.qty <= 0:
+            return TradeFriendExecutionResult(
+                success=False,
+                broker_order_id=None,
+                raw_response=None,
+                error="Invalid quantity"
+            )
 
-        if qty <= 0:
-            logger.error(f"Invalid qty: {qty}")
-            return False
+        # Resolve security_id internally
+        security_id = self.instrument_repo.resolve_security_id(order.symbol)
 
-        if side != "BUY":
-            logger.error("Dhan adapter currently supports BUY only")
-            return False
-
-        # --------------------------------------------------
-        # RESOLVE SECURITY ID
-        # --------------------------------------------------
-        security_id = self.instrument_repo.resolve_security_id(symbol)
         if not security_id:
-            logger.error(f"Dhan security_id not found for {symbol}")
-            return False
+            return TradeFriendExecutionResult(
+                success=False,
+                broker_order_id=None,
+                raw_response=None,
+                error=f"Security ID not found for {order.symbol}"
+            )
 
-        # --------------------------------------------------
-        # PREPARE REQUEST PAYLOAD (FOR AUDIT)
-        # --------------------------------------------------
-        request_payload = {
-            "symbol": symbol,
-            "security_id": security_id,
-            "qty": qty,
-            "side": side,
-            "exchange_segment": self.EXCHANGE,
-            "order_type": self.ORDER_TYPE,
-            "product_type": self.PRODUCT,
-            "tag": tag
-        }
-
-        # --------------------------------------------------
-        # AUDIT: ATTEMPT
-        # --------------------------------------------------
-        audit_id = self.audit_repo.log_attempt(
-            trade_id=trade_id,
-            symbol=symbol,
-            broker=self.BROKER_NAME,
-            order_mode=order_mode,
-            side=side,
-            qty=qty,
-            resolved_id=security_id,
-            exchange=self.EXCHANGE,
-            product=self.PRODUCT,
-            order_type=self.ORDER_TYPE,
-            request_payload=request_payload
-        )
-
-        # --------------------------------------------------
-        # EXECUTE ORDER
-        # --------------------------------------------------
         try:
             logger.info(
-                f"📤 DHAN ORDER | Symbol={symbol} | Qty={qty} | SID={security_id}"
+                f"📤 DHAN ORDER | Symbol={order.symbol} | Qty={order.qty} | Side={order.side}"
             )
 
             result = self.client.place_order(
                 security_id=security_id,
-                qty=qty,
-                tag=tag
+                side=order.side,
+                quantity=order.qty,
+                exchange_segment=self.EXCHANGE,
+                product_type=self.PRODUCT,
+                order_type=self.ORDER_TYPE,
+                tag=order.tag
             )
 
-            if not result:
-                raise Exception("Dhan order rejected")
+            if not result.get("success"):
+                return TradeFriendExecutionResult(
+                    success=False,
+                    broker_order_id=None,
+                    raw_response=result,
+                    error=result.get("error")
+                )
 
-            # --------------------------------------------------
-            # AUDIT: SUCCESS
-            # --------------------------------------------------
-            self.audit_repo.log_result(
-                audit_id=audit_id,
-                status="SUCCESS",
-                response_payload={"status": "success"}
+            return TradeFriendExecutionResult(
+                success=True,
+                broker_order_id=result.get("broker_order_id"),
+                raw_response=result.get("raw_response"),
+                error=None
             )
-
-            logger.info(
-                f"✅ DHAN order placed | Symbol={symbol} | Qty={qty}"
-            )
-            return True
 
         except Exception as e:
-            logger.exception("❌ DHAN order failed")
+            logger.exception("❌ DHAN ORDER FAILED")
 
-            # --------------------------------------------------
-            # AUDIT: FAILURE
-            # --------------------------------------------------
-            self.audit_repo.log_result(
-                audit_id=audit_id,
-                status="FAILED",
-                error_message=str(e)
+            return TradeFriendExecutionResult(
+                success=False,
+                broker_order_id=None,
+                raw_response=None,
+                error=str(e)
             )
-            return False

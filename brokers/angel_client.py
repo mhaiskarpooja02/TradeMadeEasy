@@ -11,11 +11,12 @@ Usage:
 import time
 import pyotp
 from SmartApi import SmartConnect
-from utils.logger import get_logger
+from utils.logger import get_brokerorder_logger, get_logger
 import pandas as pd
 from datetime import datetime, timedelta
 from config.TradeFriendSettings import api_key, username, pin, totp_qr,DEFAULT_INTERVAL,LOOKBACK_DAYS, RangeBoundLOOKBACK_DAYS
 
+Brokerorderlogger = get_brokerorder_logger()
 logger = get_logger(__name__)
 
 # ------------------------------------------------------------------------
@@ -353,35 +354,41 @@ class AngelClient:
     def place_order(self, payload: dict) -> str:
         """
         Place order via Angel SmartAPI.
-
-        Expected payload:
-        {
-            "variety": "NORMAL",
-            "tradingsymbol": "SBIN-EQ",
-            "symboltoken": "3045",
-            "transactiontype": "BUY",
-            "exchange": "NSE",
-            "ordertype": "MARKET",
-            "producttype": "INTRADAY",
-            "duration": "DAY",
-            "price": 0,
-            "quantity": 2
-        }
-
-        Returns:
-            order_id (str)
+        Returns: order_id (str)
+        Raises: Exception if failed
         """
         try:
             if not self.smart_api:
                 raise Exception("Angel client not logged in")
 
-            order_id = self.smart_api.placeOrder(payload)
-            return order_id
+            response = self.smart_api.placeOrder(payload)
+
+            Brokerorderlogger.info(f"Raw Angel placeOrder response → {response}")
+
+            if not response:
+                raise Exception("Empty response from Angel")
+
+            # If SmartAPI returns dict
+            if isinstance(response, dict):
+
+                if not response.get("status"):
+                    raise Exception(response.get("message", "Angel order failed"))
+
+                data = response.get("data")
+                if not data or "orderid" not in data:
+                    raise Exception(f"Invalid order response structure: {response}")
+
+                return data["orderid"]
+
+            # If SmartAPI returns string order_id directly
+            if isinstance(response, str):
+                return response
+
+            raise Exception(f"Unexpected response type: {response}")
 
         except Exception as e:
-            logger.error(f"Angel place_order failed: {e}")
+            Brokerorderlogger.error(f"Angel place_order failed: {e}")
             raise
-
 # ================================================================================
 # Singleton-style Helper Functions
 # ================================================================================

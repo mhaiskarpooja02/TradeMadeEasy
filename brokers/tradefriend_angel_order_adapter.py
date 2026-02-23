@@ -1,110 +1,162 @@
-# brokers/tradefriend_angel_order_adapter.py
+"""
+===============================================================================
+TradeFriendAngelOrderAdapter
+===============================================================================
+"""
 
-import logging
-import pyotp
-from SmartApi import SmartConnect
-
-from config.TradeFriendSettings import api_key, username, pin, totp_qr
-from db.TradeFriendinstrument_db import TradeFindDB
-
-logger = logging.getLogger(__name__)
+from core.TradeFriendDataProvider import TradeFriendDataProvider
+from models.tradefriend_execution_result import TradeFriendExecutionResult
+from utils.logger import get_brokerorder_logger
+from db.TradeFriendStocMasterRepo import TradeFriendStocMasterRepo
+from brokers.angel_orderclient import init_client
 
 
 class TradeFriendAngelOrderAdapter:
-    """
-    PURPOSE:
-    - Place LIVE orders via AngelOne SmartAPI
-    - NSE Equity only
-    - Token resolution strictly from TradeFindDB
-    - OMS-compatible adapter
-    """
 
-    EXCHANGE = "NSE"
-    VARIETY = "NORMAL"
-    DEFAULT_PRODUCT = "INTRADAY"
-    DEFAULT_ORDER_TYPE = "MARKET"
-    DURATION = "DAY"
-
+    # ==========================================================================
     def __init__(self):
-        self.client = None
-        self.instrument_repo = TradeFindDB()
-        self._login()
+        self.logger = get_brokerorder_logger()
+        self.stockmaster_repo = TradeFriendStocMasterRepo()
+        self.client = init_client()
+        self.data_provider = TradeFriendDataProvider()
 
-    # --------------------------------------------------
-    # LOGIN
-    # --------------------------------------------------
-    def _login(self):
-        try:
-            smart = SmartConnect(api_key)
-            totp = pyotp.TOTP(totp_qr).now()
+        self.logger.info("Angel Order Adapter initialized")
 
-            data = smart.generateSession(username, pin, totp)
-            if not data.get("status"):
-                raise Exception(data)
-
-            smart.generateToken(data["data"]["refreshToken"])
-            self.client = smart
-
-            logger.info("✅ AngelOne login successful")
-
-        except Exception:
-            logger.exception("❌ AngelOne login failed")
-            self.client = None
-
-    # --------------------------------------------------
-    # PLACE ORDER (OMS ENTRY POINT)
-    # --------------------------------------------------
-    def place_order(self, order: dict) -> bool:
-        """
-        OMS-compatible order execution.
-
-        Expected order format:
-        {
-            "symbol": "SBIN-EQ",
-            "qty": 2,
-            "side": "BUY",
-            "order_type": "MARKET",   # optional
-            "product": "INTRADAY"     # optional
-        }
-        """
-
-        if not self.client:
-            logger.error("Angel client not initialized")
-            return False
+    # ==========================================================================
+    # SYMBOL RESOLUTION
+    # ==========================================================================
+    def _resolve_symbol(self, symbol: str):
 
         try:
-            symbol = order["symbol"]
-            qty = int(order["qty"])
-            side = order["side"]
+            rows = self.stockmaster_repo.get_active_symbols()
 
-            if qty <= 0:
-                raise ValueError(f"Invalid qty: {qty}")
+            for row in rows:
+                if row["symbol"] == symbol:
+                    self.logger.info(
+                        f"✅ Symbol resolved | {symbol} | Token: {row['token']}"
+                    )
+                    return {
+                        "symbol": row["symbol"],
+                        "trading_symbol": row["trading_symbol"],
+                        "token": row["token"],
+                        "exchange": "NSE"
+                    }
 
-            resolved = self.instrument_repo.resolve_active_symbol(symbol)
+            self.logger.error(f"❌ Symbol not found in StockMaster: {symbol}")
+            return None
+
+        except Exception as e:
+            self.logger.exception(
+                f"❌ Symbol resolution failed for {symbol} | Error: {e}"
+            )
+            return None
+
+    # ==========================================================================
+    # PLACE ORDER
+    # ==========================================================================
+    def place_order(self, order_request) -> TradeFriendExecutionResult:
+
+        try:
+            self.logger.info(
+                f"📤 Angel place_order | "
+                f"trade_id={order_request.trade_id} | "
+                f"symbol={order_request.symbol} | "
+                f"qty={order_request.qty} | "
+                f"side={order_request.side} | "
+                f"mode={order_request.order_mode}"
+            )
+
+            symbol = order_request.symbol
+            side = order_request.side
+            quantity = order_request.qty
+            order_mode = order_request.order_mode
+
+            order_type = getattr(order_request, "order_type", "MARKET")
+            product_type = getattr(order_request, "product_type", "INTRADAY")
+            tag = getattr(order_request, "tag", None)
+
+            # ----------------------------------------------------------
+            # PAPER MODE
+            # ----------------------------------------------------------
+            if order_mode == "PAPER":
+                self.logger.info(f"📝 PAPER ORDER simulated | {symbol}")
+
+                return TradeFriendExecutionResult(
+                    success=True,
+                    broker_order_id="PAPER_ANGEL_ORDER",
+                    error=None
+                )
+
+            # ----------------------------------------------------------
+            # Resolve Symbol
+            # ----------------------------------------------------------
+            resolved = self._resolve_symbol(symbol)
+
             if not resolved:
-                raise Exception(f"Token not found in DB for {symbol}")
+                return TradeFriendExecutionResult(
+                    success=False,
+                    broker_order_id=None,
+                    error=f"Symbol resolution failed for {symbol}"
+                )
 
-            params = {
-                "variety": self.VARIETY,
-                "tradingsymbol": resolved["symbol"],
-                "symboltoken": resolved["token"],
+            token = resolved["token"]
+            trading_symbol = resolved["trading_symbol"]
+            exchange = resolved["exchange"]
+
+            # ----------------------------------------------------------
+            # Build Payload
+            # ----------------------------------------------------------
+            angel_payload = {
+                "variety": "NORMAL",
+                "tradingsymbol": trading_symbol,
+                "symboltoken": token,
                 "transactiontype": side,
-                "exchange": self.EXCHANGE,
-                "ordertype": order.get("order_type", self.DEFAULT_ORDER_TYPE),
-                "producttype": order.get("product", self.DEFAULT_PRODUCT),
-                "duration": self.DURATION,
-                "price": 0,
-                "quantity": qty,
+                "exchange": exchange,
+                "ordertype": order_type,
+                "producttype": product_type,
+                "duration": "DAY",
+                "quantity": quantity
             }
 
-            order_id = self.client.placeOrder(params)
+            if order_type == "LIMIT":
+                angel_payload["price"] = order_request.price
 
-            logger.info(
-                f"✅ Angel order placed | "
-                f"Symbol={symbol} | Qty={qty} | Side={side} | OrderID={order_id}"
+            if tag:
+                angel_payload["tag"] = tag
+
+            self.logger.info(f"📦 Angel Payload → {angel_payload}")
+
+            # ----------------------------------------------------------
+            # Broker Call
+            # ----------------------------------------------------------
+            order_id = self.client.place_order(angel_payload)
+
+            self.logger.info(f"✅ Angel Order Placed | OrderID={order_id}")
+
+            return TradeFriendExecutionResult(
+                success=True,
+                broker_order_id=order_id,
+                error=None
             )
-            return True
 
+        except Exception as e:
+
+            self.logger.error(
+                f"❌ Angel Order FAILED | "
+                f"trade_id={getattr(order_request, 'trade_id', None)} | "
+                f"error={str(e)}",
+                exc_info=True
+            )
+
+            return TradeFriendExecutionResult(
+                success=False,
+                broker_order_id=None,
+                error=str(e)
+            )
+
+    # ==========================================================================
+    def close(self):
+        try:
+            self.stockmaster_repo.close()
         except Exception:
-            logger.exception("❌ Angel order failed")
-            return False
+            pass

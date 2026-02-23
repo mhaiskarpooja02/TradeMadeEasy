@@ -144,3 +144,12 @@ class TradeFriendStocMasterRepo:
             FROM tradefriend_stocmaster
         """)
         return dict(self.cursor.fetchone())
+    
+    def get_active_symbol(self, symbol: str):
+        self.cursor.execute("""
+            SELECT symbolnameltp, token
+            FROM tradefriend_stocmaster
+            WHERE symbol = ?
+            AND is_active = 1
+        """, (symbol,))
+        return self.cursor.fetchone()

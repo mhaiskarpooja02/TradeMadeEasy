@@ -1,7 +1,7 @@
 import requests
 import webbrowser
 from utils.logger import get_logger
-from config.settings import api_key, api_secret
+from config.TradeFriendSettings import api_key, api_secret
 import json
 from pathlib import Path
 

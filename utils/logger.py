@@ -257,6 +257,33 @@ def get_daily_scan_logger():
 
     return logger
 
+
+# ---------------------------------------------------------------------
+# Angel REST logger (FILE ONLY - DEBUG LEVEL)
+# ---------------------------------------------------------------------
+def get_angel_rest_logger():
+    """
+    Dedicated logger for Angel REST communication.
+    - File only
+    - DEBUG level
+    - Logs latency, raw response, token retry events
+    """
+    logger = logging.getLogger("angel_rest")
+    logger.setLevel(logging.DEBUG)
+
+    if not logger.handlers:
+
+        log_dir = get_today_log_dir()
+        log_file = os.path.join(log_dir, "angel_rest.log")
+
+        fh = _build_file_handler(log_file, logging.DEBUG)
+
+        logger.addHandler(fh)
+        logger.propagate = False
+
+        _wrap_logger_methods(logger)
+
+    return logger
 # ---------------------------------------------------------------------
 # Wrap logger methods for sanitization
 # ---------------------------------------------------------------------

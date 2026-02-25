@@ -5,6 +5,7 @@ from utils.logger import get_monitor_logger
 from core.TradeFriendDataProvider import TradeFriendDataProvider
 from db.TradeFriendTradeRepo import TradeFriendTradeRepo
 from Servieces.TradeFriendExitOrderService import TradeFriendExitOrderService
+from Servieces.TradeFriendOrderManagementService import TradeFriendOrderManagementService
 from config.TradeFriendConfig import (
     ALLOW_TRAILING_SL,
     ENABLE_PARTIAL_BOOKING,
@@ -25,6 +26,7 @@ class TradeFriendSwingTradeMonitor:
         self.provider = TradeFriendDataProvider()
         self.trade_repo = TradeFriendTradeRepo()
         self.exit_oms = TradeFriendExitOrderService()
+        self.entry_oms = TradeFriendOrderManagementService()
 
     # ==================================================
     # PUBLIC ENTRY
@@ -80,17 +82,32 @@ class TradeFriendSwingTradeMonitor:
             return
 
         # ==================================================
-        # 2️⃣ PARTIAL PROFIT TIERS
+        # 2️⃣ SCALE-IN
+        # ==================================================
+        logger.info(f"2️⃣ SCALE-IN CHECK | Symbol={trade['symbol']} | LTP={ltp}")
+        scaled = self._process_scale_in(trade, ltp)
+        if scaled:
+            logger.info(f"2️⃣ SCALE-IN COMPLETED | Symbol={trade['symbol']}")
+            return
+        else:
+            logger.info(f"2️⃣ SCALE-IN SKIPPED / NOT TRIGGERED | Symbol={trade['symbol']}")
+
+        # ==================================================
+        # 3️⃣ PARTIAL PROFIT TIERS
         # ==================================================
         if ENABLE_PARTIAL_BOOKING:
+            logger.info(f"3️⃣ PARTIAL PROFIT CHECK | Symbol={trade['symbol']} | LTP={ltp}")
             exited = self._process_partial_tiers(
                 trade, ltp, entry, target, initial_qty, remaining_qty
             )
             if exited:
+                logger.info(f"3️⃣ PARTIAL PROFIT EXITED | Symbol={trade['symbol']}")
                 return
+            else:
+                logger.info(f"3️⃣ PARTIAL PROFIT NOT TRIGGERED | Symbol={trade['symbol']}")
 
         # ==================================================
-        # 3️⃣ TARGET → RUNNER MODE
+        # 4️⃣   TARGET → RUNNER MODE
         # ==================================================
         if ltp >= target and hold_mode == HoldMode.PARTIAL:
             self.trade_repo.update_sl(trade_id, target)
@@ -101,7 +118,7 @@ class TradeFriendSwingTradeMonitor:
             return
 
         # ==================================================
-        # 4️⃣ RUNNER TRAILING SL
+        # 5️⃣   RUNNER TRAILING SL
         # ==================================================
         if ALLOW_TRAILING_SL and hold_mode == HoldMode.RUNNER:
             new_sl = max(sl, ltp * 0.98)
@@ -290,3 +307,83 @@ class TradeFriendSwingTradeMonitor:
             return ExitReason.PROFIT_LOCK_SL_HIT
 
         return ExitReason.INITIAL_SL_HIT
+
+    # ==================================================
+    # process scale in
+    # ==================================================
+    def _process_scale_in(self, trade: dict, ltp: float) -> bool:
+        symbol = trade["symbol"]
+        trade_id = trade["id"]
+
+        entry = float(trade["entry"])
+        initial_qty = int(trade["initial_qty"])
+        remaining_qty = int(trade["remaining_qty"])
+
+        logger.debug(f"🔹 SCALE-IN CHECK | {symbol} | Trade ID={trade_id} | LTP={ltp} | Entry={entry} | Remaining Qty={remaining_qty}")
+
+        # Nothing left to scale
+        if remaining_qty <= 0:
+            logger.info(f"⏹ SCALE-IN SKIPPED | {symbol} | No remaining quantity to scale-in")
+            return False
+
+        # Example trigger: 1% above entry
+        trigger_price = entry * 1.01
+        logger.debug(f"💡 SCALE-IN TRIGGER PRICE CALCULATED | {symbol} | Trigger={trigger_price}")
+
+        if ltp < trigger_price:
+            logger.info(f"⏳ SCALE-IN NOT TRIGGERED | {symbol} | LTP={ltp} below trigger={trigger_price}")
+            return False
+
+        scale_qty = remaining_qty
+        logger.info(f"📈 SCALE-IN TRIGGERED | {symbol} | LTP={ltp} | Scaling Qty={scale_qty}")
+
+        try:
+            # Call ENTRY OMS
+            executions = self.entry_oms.place_entry_order(
+                trade_id=trade_id,
+                symbol=symbol,
+                qty=scale_qty,
+                side="BUY",
+                price=ltp
+            )
+            logger.debug(f"📝 SCALE-IN ORDER SENT | {symbol} | Order Response={executions}")
+        except Exception as e:
+            logger.error(f"❌ SCALE-IN OMS ERROR | {symbol} | Error: {e}")
+            return False
+
+        if not executions:
+            logger.warning(f"❌ SCALE-IN FAILED | {symbol} | No executions returned")
+            return False
+
+        total_filled = 0
+        weighted_price = 0.0
+
+        for ex in executions:
+            qty = ex.get("filled_qty", 0)
+            price = ex.get("avg_price", 0.0)
+            logger.debug(f"🔄 SCALE-IN EXECUTION | {symbol} | Filled={qty} | Price={price}")
+
+            total_filled += qty
+            weighted_price += qty * price
+
+        if total_filled <= 0:
+            logger.info(f"⏳ SCALE-IN PLACED — WAITING FILL | {symbol}")
+            return False
+
+        avg_price = round(weighted_price / total_filled, 2)
+        logger.info(f"✅ SCALE-IN FILLED | {symbol} | Total Qty={total_filled} | Avg Price={avg_price}")
+
+        try:
+            # Update trade table same way initial entry does
+            self.trade_repo.update_entry_fill(
+                trade_id=trade_id,
+                fill_qty=total_filled,
+                fill_price=avg_price
+            )
+            logger.debug(f"💾 TRADE REPO UPDATED | {symbol} | Trade ID={trade_id}")
+        except Exception as e:
+            logger.error(f"❌ TRADE REPO UPDATE FAILED | {symbol} | Error: {e}")
+            return False
+
+        logger.info(f"✅ SCALE-IN COMPLETE | {symbol}")
+        return True

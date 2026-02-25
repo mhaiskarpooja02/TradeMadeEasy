@@ -38,6 +38,7 @@ class TradeFriendScheduler:
         self._last_trigger_minute = None
         self._decision_done_date = None
         self._eod_report_date = None
+        self._last_reconcile_minute = None
 
     # ==================================================
     # LIFECYCLE
@@ -101,6 +102,10 @@ class TradeFriendScheduler:
     def is_eod_report_time(self):
     # After market close + buffer
         return self._in_range(dtime(15,31 ), dtime(18, 55))
+    
+    def is_reconciliation_time(self):
+    # Run during active market hours
+        return self._in_range(dtime(9, 16), dtime(15, 30))
 
     # ==================================================
     # MAIN LOOP
@@ -160,6 +165,21 @@ class TradeFriendScheduler:
                         monitor.run()
 
                         self._last_trigger_minute = minute_key
+
+                # ----------------------------------------------
+                # 4️⃣ RECONCILIATION ENGINE (Minute Protected)
+                # ----------------------------------------------
+                if self.is_reconciliation_time():
+                    if self._last_reconcile_minute != minute_key:
+                    
+                        logger.info("🔁 Running Reconciliation Service")
+                
+                        try:
+                            self.manager.tf_reconciliation_service()
+                        except Exception:
+                            logger.exception("❌ Reconciliation failed")
+                
+                        self._last_reconcile_minute = minute_key
 
                 
 

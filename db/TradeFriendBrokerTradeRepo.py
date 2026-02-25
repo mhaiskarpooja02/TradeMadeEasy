@@ -284,3 +284,66 @@ class TradeFriendBrokerTradeRepo:
         """, (symbol,)).fetchall()
     
         return [dict(r) for r in rows]
+    
+    # =====================================================
+    # GENERIC FETCH UTILITY (FOR REPORTING / DEBUG)
+    # =====================================================
+    def fetch_trades(
+        self,
+        trade_id: int = None,
+        symbol: str = None,
+        broker: str = None,
+        leg_type: str = None,
+        status: str = None,
+        position_status: str = None,
+        from_date: str = None,
+        to_date: str = None,
+        limit: int = 500
+    ):
+        """
+        Flexible fetch utility for reporting and reconciliation.
+        All parameters optional.
+        """
+    
+        query = "SELECT * FROM tradefriend_broker_trades WHERE 1=1"
+        params = []
+    
+        if trade_id:
+            query += " AND trade_id=?"
+            params.append(trade_id)
+    
+        if symbol:
+            query += " AND symbol=?"
+            params.append(symbol)
+    
+        if broker:
+            query += " AND broker=?"
+            params.append(broker)
+    
+        if leg_type:
+            query += " AND leg_type=?"
+            params.append(leg_type)
+    
+        if status:
+            query += " AND status=?"
+            params.append(status)
+    
+        if position_status:
+            query += " AND position_status=?"
+            params.append(position_status)
+    
+        if from_date:
+            query += " AND created_on>=?"
+            params.append(from_date)
+    
+        if to_date:
+            query += " AND created_on<=?"
+            params.append(to_date)
+    
+        query += " ORDER BY created_on DESC"
+    
+        if limit:
+            query += f" LIMIT {limit}"
+    
+        rows = self.cur.execute(query, tuple(params)).fetchall()
+        return [dict(r) for r in rows]

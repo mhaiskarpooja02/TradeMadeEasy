@@ -32,9 +32,13 @@ class TradeFriendAngelOrderAdapter:
 
             for row in rows:
                 if row["symbol"] == symbol:
-                    self.logger.info(
-                        f"✅ Symbol resolved | {symbol} | Token: {row['token']}"
-                    )
+                    self.logger.info("=" * 60)
+                    self.logger.info("🔎 ANGEL SYMBOL RESOLUTION")
+                    self.logger.info(f"Symbol          : {row['symbol']}")
+                    self.logger.info(f"Trading Symbol  : {row['trading_symbol']}")
+                    self.logger.info(f"Token           : {row['token']}")
+                    self.logger.info(f"Exchange        : NSE")
+                    self.logger.info("=" * 60)
                     return {
                         "symbol": row["symbol"],
                         "trading_symbol": row["trading_symbol"],
@@ -72,7 +76,7 @@ class TradeFriendAngelOrderAdapter:
             order_mode = order_request.order_mode
 
             order_type = getattr(order_request, "order_type", "MARKET")
-            product_type = getattr(order_request, "product_type", "INTRADAY")
+            product_type = getattr(order_request, "product_type", "DELIVERY")
             tag = getattr(order_request, "tag", None)
 
             # ----------------------------------------------------------
@@ -106,6 +110,10 @@ class TradeFriendAngelOrderAdapter:
             # ----------------------------------------------------------
             # Build Payload
             # ----------------------------------------------------------
+
+            if "_" in trading_symbol:
+                trading_symbol = trading_symbol.replace("_EQ", "-EQ")
+
             angel_payload = {
                 "variety": "NORMAL",
                 "tradingsymbol": trading_symbol,
@@ -115,7 +123,9 @@ class TradeFriendAngelOrderAdapter:
                 "ordertype": order_type,
                 "producttype": product_type,
                 "duration": "DAY",
-                "quantity": quantity
+                "quantity": quantity,
+                "disclosedquantity": 0,
+                "scripconsent": "yes"
             }
 
             if order_type == "LIMIT":
@@ -129,13 +139,18 @@ class TradeFriendAngelOrderAdapter:
             # ----------------------------------------------------------
             # Broker Call
             # ----------------------------------------------------------
-            order_id = self.client.place_order(angel_payload)
+            # Place order
+            response = self.client.place_order(angel_payload)
+            
+            order_id = response["order_id"]
+            unique_id = response["unique_order_id"]
 
             self.logger.info(f"✅ Angel Order Placed | OrderID={order_id}")
 
             return TradeFriendExecutionResult(
                 success=True,
                 broker_order_id=order_id,
+                unique_order_id=order_id,
                 error=None
             )
 
@@ -160,3 +175,61 @@ class TradeFriendAngelOrderAdapter:
             self.stockmaster_repo.close()
         except Exception:
             pass
+
+    # ==========================================================================
+    # ORDER STATUS FETCH (ABSTRACTION LAYER)
+    # ==========================================================================
+    def get_order_status(self, broker_order_id: str) -> dict:
+        """
+        Fetch order status from Angel
+        Returns normalized structure
+        Does NOT touch DB
+        """
+
+        try:
+            self.logger.info(
+                f"🔎 [ANGEL] Fetching order status | {broker_order_id}"
+            )
+
+            response = self.client.get_order_status(broker_order_id)
+
+            if not response:
+                raise Exception("Empty response from broker")
+
+            raw_status = str(response.get("orderstatus", "")).lower()
+            filled_qty = int(response.get("filledshares", 0) or 0)
+            avg_price = float(response.get("averageprice", 0) or 0)
+            rejection_reason = response.get("text", "")
+
+            # ------------------------------
+            # Normalize lifecycle
+            # ------------------------------
+            if raw_status == "complete":
+                status = "COMPLETE"
+            elif raw_status == "cancelled":
+                status = "CANCELLED"
+            elif raw_status == "rejected":
+                status = "REJECTED"
+            elif filled_qty > 0:
+                status = "PARTIAL"
+            else:
+                status = "PLACED"
+
+            self.logger.info(
+                f"📊 [ANGEL] Status={status} | Filled={filled_qty} | Avg={avg_price}"
+            )
+
+            return {
+                "status": status,
+                "filled_qty": filled_qty,
+                "avg_price": avg_price,
+                "raw_status": raw_status,
+                "rejection_reason": rejection_reason
+            }
+
+        except Exception as e:
+            self.logger.error(
+                f"❌ [ANGEL] Status fetch failed | "
+                f"{broker_order_id} | {str(e)}"
+            )
+            raise

@@ -168,6 +168,27 @@ class TradeFriendOrderAuditRepo:
 
         self.conn.commit()
 
+    def fetch_orders(self, from_date=None, to_date=None, limit=None):
+        query = "SELECT * FROM tradefriend_order_audit WHERE 1=1"
+        params = []
+
+        if from_date:
+            query += " AND created_on  >= ?"
+            params.append(from_date)
+
+        if to_date:
+            query += " AND created_on  <= ?"
+            params.append(to_date)
+
+        query += " ORDER BY created_on  DESC"
+
+        if limit:
+            query += f" LIMIT {limit}"
+
+        self.cur.execute(query, params)
+        rows = self.cur.fetchall()
+
+        return [dict(row) for row in rows]
     # --------------------------------------------------
     # READERS (DEBUG / UI)
     # --------------------------------------------------

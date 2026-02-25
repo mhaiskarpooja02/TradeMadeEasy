@@ -95,12 +95,49 @@ class AngelOrderClient:
         if not data or "orderid" not in data:
             raise Exception(f"Invalid order response: {response}")
 
-        order_id = data["orderid"]
+        order_id = data.get("orderid")
+        unique_order_id = data.get("uniqueorderid")
+    
+        if not order_id or not unique_order_id:
+            raise Exception(f"Incomplete order response: {response}")
+    
+        self.logger.info(
+            f"✅ Order placed successfully → "
+            f"OrderID={order_id} | UniqueID={unique_order_id}"
+        )
+    
+        return {
+            "order_id": order_id,
+            "unique_order_id": unique_order_id
+        }
 
-        self.logger.info(f"✅ Order placed successfully → {order_id}")
+    # ==========================================================================
+    # Get Individual Order Status
+    # ==========================================================================
+    def get_order_status(self, unique_order_id: str) -> dict:
 
-        return order_id
+        endpoint = f"/rest/secure/angelbroking/order/v1/details/{unique_order_id}"
 
+        if not self.access_token:
+            self.login()
+
+        url = f"{BASE_URL}{endpoint}"
+        headers = self._auth_headers()
+
+        start = time.perf_counter()
+        response = self.client.get(url, headers=headers)
+        latency = (time.perf_counter() - start) * 1000
+
+        self.logger.info(f"🔎 GET {endpoint}")
+        self.logger.info(f"⏱ Latency: {latency:.2f} ms")
+        self.logger.info(f"📥 Raw response: {response.text}")
+
+        data = response.json()
+
+        if not data.get("status"):
+            raise Exception(f"Order status fetch failed: {data}")
+
+        return data["data"]
     # ==========================================================================
     # POST With Retry
     # ==========================================================================

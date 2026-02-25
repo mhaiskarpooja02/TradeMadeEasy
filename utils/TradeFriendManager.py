@@ -1,6 +1,7 @@
 # utils/TradeFriendManager.py
 
 import logging
+from Servieces.TradeFriendBrokerReconciliationService import TradeFriendBrokerReconciliationService
 from core.TradeFriendDecisionRunner import TradeFriendDecisionRunner
 from core.TradeFriendSwingTradeMonitor import TradeFriendSwingTradeMonitor
 from core.TradeFriendWatchlistEngine import WatchlistEngine
@@ -88,3 +89,22 @@ class TradeFriendManager:
             report_date
         )
         logger.info("✅ TradeFriend EOD Report generation completed")
+
+    # ----------------------------------------------
+    # 🔁 RECONCILIATION SERVICE
+    # ----------------------------------------------
+    def tf_reconciliation_service(self):
+        """
+        Sync local order/trade state with broker reality.
+        - No trigger logic
+        - No new order placement
+        - Only status correction
+        """
+        logger.info("🔁 TradeFriend Reconciliation started")
+    
+        
+    
+        service = TradeFriendBrokerReconciliationService()
+        service.run()
+    
+        logger.info("✅ TradeFriend Reconciliation completed")

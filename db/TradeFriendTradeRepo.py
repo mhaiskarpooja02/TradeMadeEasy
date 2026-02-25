@@ -380,7 +380,16 @@ class TradeFriendTradeRepo:
             LIMIT 1
         """, (symbol,)).fetchone()
 
-    def fetch_ready_trades(self): return self.cursor.execute(""" SELECT * FROM tradefriend_trades WHERE status = 'READY' """).fetchall()
+    def fetch_ready_trades(self, min_entry=120):
+        return self.cursor.execute("""
+            SELECT *
+            FROM tradefriend_trades
+            WHERE status = 'READY'
+              AND entry > ?
+              AND entry < 400
+            ORDER BY confidence DESC, entry ASC
+            LIMIT 10
+        """, (min_entry,)).fetchall()
 
     # ----------------------------------------------
     # 📊 END-OF-DAY ENTRY EXECUTION REPORT

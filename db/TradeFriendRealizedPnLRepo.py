@@ -200,3 +200,72 @@ class TradeFriendRealizedPnLRepo:
         """, (week,)).fetchall()
 
         return [dict(r) for r in rows]
+    
+    # --------------------------------------------------
+    # GENERIC FETCH (FOR REPORTING / EXPORT)
+    # --------------------------------------------------
+    def fetch_pnl(
+        self,
+        trade_id: int = None,
+        symbol: str = None,
+        mode: str = None,
+        side: str = None,
+        exit_reason: str = None,
+        from_date: str = None,     # YYYY-MM-DD
+        to_date: str = None,       # YYYY-MM-DD
+        month: str = None,         # YYYY-MM
+        week: str = None,          # YYYY-WW
+        limit: int = 1000
+    ):
+        """
+        Flexible reporting query for realized PnL.
+        All parameters optional.
+        """
+    
+        query = "SELECT * FROM tradefriend_realized_pnl WHERE 1=1"
+        params = []
+    
+        if trade_id:
+            query += " AND trade_id=?"
+            params.append(trade_id)
+    
+        if symbol:
+            query += " AND symbol=?"
+            params.append(symbol)
+    
+        if mode:
+            query += " AND mode=?"
+            params.append(mode)
+    
+        if side:
+            query += " AND side=?"
+            params.append(side)
+    
+        if exit_reason:
+            query += " AND exit_reason=?"
+            params.append(exit_reason)
+    
+        if from_date:
+            query += " AND exit_date>=?"
+            params.append(from_date)
+    
+        if to_date:
+            query += " AND exit_date<=?"
+            params.append(to_date)
+    
+        if month:
+            query += " AND exit_month=?"
+            params.append(month)
+    
+        if week:
+            query += " AND exit_week=?"
+            params.append(week)
+    
+        query += " ORDER BY exit_time DESC"
+    
+        if limit:
+            query += f" LIMIT {limit}"
+    
+        rows = self.cur.execute(query, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+    

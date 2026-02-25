@@ -146,7 +146,8 @@ class AngelClient:
 
         for attempt in range(1, max_retries + 1):
             try:
-                to_date = datetime.now()
+                to_date = datetime.now()- timedelta(days=1)
+
                 from_date = to_date - timedelta(days=days)
                 
                 params = {

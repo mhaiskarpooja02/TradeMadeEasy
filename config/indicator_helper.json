@@ -2,7 +2,7 @@
     "ema_short": 20,
     "ema_long": 50,
     "candles_above": 2,
-    "lookback_days": 120,
+    "lookback_days": 200,
     "RangeBoundlookback_days": 360,
     "default_interval": "ONE_DAY",
     "rsi_period": 14,

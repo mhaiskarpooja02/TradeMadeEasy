@@ -6,6 +6,7 @@ import httpx
 import time
 import pyotp
 from typing import Optional
+import uuid
 
 from config.TradeFriendSettings import api_key, username, pin, totp_qr
 from utils.logger import get_angel_rest_logger
@@ -111,62 +112,119 @@ class AngelOrderClient:
             "unique_order_id": unique_order_id
         }
 
+
     # ==========================================================================
     # Get Individual Order Status
     # ==========================================================================
     def get_order_status(self, unique_order_id: str) -> dict:
 
-        endpoint = f"/rest/secure/angelbroking/order/v1/details/{unique_order_id}"
-
         if not self.access_token:
             self.login()
 
+        endpoint = f"/rest/secure/angelbroking/order/v1/details/{unique_order_id}"
+
+        response = self._get(endpoint)
+
+        if not response:
+            raise Exception("Empty response from Angel")
+
+        if not response.get("status"):
+            raise Exception(f"Order status fetch failed: {response}")
+
+        data = response.get("data")
+
+        if not data:
+            raise Exception(f"Invalid order status response: {response}")
+
+        self.logger.info(
+            f"✅ Order status fetched successfully "
+            f"| UniqueID={unique_order_id}"
+        )
+        return data
+
+    
+    # ==========================================================================
+    # POST With Retry
+    # ==========================================================================
+    def _post(self, endpoint: str, payload: dict, retry=True):
+    
+        request_id = uuid.uuid4().hex[:6]
+    
         url = f"{BASE_URL}{endpoint}"
         headers = self._auth_headers()
+    
+        self.logger.info(f"[REQ={request_id}] 🚀 POST {endpoint}")
+        self.logger.info(f"[REQ={request_id}] 📤 Payload: {payload}")
+    
+        start = time.perf_counter()
+        response = self.client.post(url, json=payload, headers=headers)
+        latency = (time.perf_counter() - start) * 1000
+    
+        self.logger.info(f"[REQ={request_id}] ⏱ Latency: {latency:.2f} ms")
+        self.logger.info(f"[REQ={request_id}] 📥 Raw response: {response.text}")
+    
+        try:
+            data = response.json()
+        except Exception:
+            raise Exception(
+                f"[REQ={request_id}] Non-JSON response: {response.text}"
+            )
+    
+        # -----------------------------------------
+        # Token Expiry Handling
+        # -----------------------------------------
+        if not data.get("status") and retry:
+            message = str(data.get("message", "")).lower()
+    
+            if "token" in message or "session" in message:
+                self.logger.warning(
+                    f"[REQ={request_id}] ♻️ Token expired. "
+                    f"Re-login & retrying once..."
+                )
+                self.login()
+                return self._post(endpoint, payload, retry=False)
+    
+        return data
+
+    # ==========================================================================
+    # GET With Retry
+    # ==========================================================================
+    def _get(self, endpoint: str, retry=True):
+
+        request_id = uuid.uuid4().hex[:6]
+
+        url = f"{BASE_URL}{endpoint}"
+        headers = self._auth_headers()
+
+        self.logger.info(f"[REQ={request_id}] 🔎 GET {endpoint}")
 
         start = time.perf_counter()
         response = self.client.get(url, headers=headers)
         latency = (time.perf_counter() - start) * 1000
 
-        self.logger.info(f"🔎 GET {endpoint}")
-        self.logger.info(f"⏱ Latency: {latency:.2f} ms")
-        self.logger.info(f"📥 Raw response: {response.text}")
-
-        data = response.json()
-
-        if not data.get("status"):
-            raise Exception(f"Order status fetch failed: {data}")
-
-        return data["data"]
-    # ==========================================================================
-    # POST With Retry
-    # ==========================================================================
-    def _post(self, endpoint: str, payload: dict, retry=True):
-
-        url = f"{BASE_URL}{endpoint}"
-        headers = self._auth_headers()
-
-        start = time.perf_counter()
-        response = self.client.post(url, json=payload, headers=headers)
-        latency = (time.perf_counter() - start) * 1000
-
-        self.logger.info(f"🚀 POST {endpoint}")
-        self.logger.info(f"📤 Payload: {payload}")
-        self.logger.info(f"⏱ Latency: {latency:.2f} ms")
-        self.logger.info(f"📥 Raw response: {response.text}")
+        self.logger.info(f"[REQ={request_id}] ⏱ Latency: {latency:.2f} ms")
+        self.logger.info(f"[REQ={request_id}] 📥 Raw response: {response.text}")
 
         try:
             data = response.json()
         except Exception:
-            raise Exception(f"Non-JSON response: {response.text}")
+            raise Exception(
+                f"[REQ={request_id}] Non-JSON response: {response.text}"
+            )
 
+        # -----------------------------------------
+        # Token Expiry Handling
+        # -----------------------------------------
         if not data.get("status") and retry:
             message = str(data.get("message", "")).lower()
 
             if "token" in message or "session" in message:
-                self.logger.warning("♻️ Token expired. Re-login & retrying once...")
+                self.logger.warning(
+                    f"[REQ={request_id}] ♻️ Token expired. "
+                    f"Re-login & retrying once..."
+                )
                 self.login()
-                return self._post(endpoint, payload, retry=False)
+                return self._get(endpoint, retry=False)
 
         return data
 

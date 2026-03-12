@@ -147,15 +147,15 @@ class TradeFriendDashboard(ttk.Frame):
         notebook.pack(fill="both", expand=True)
 
         self.watchlist_tab = ttk.Frame(notebook)
-        self.trades_tab = ttk.Frame(notebook)
+        
         self.history_tab = ttk.Frame(notebook)
 
         notebook.add(self.watchlist_tab, text="📋 Watchlist")
-        notebook.add(self.trades_tab, text="📈 Active Trades")
+       
         notebook.add(self.history_tab, text="📜 History")
 
         self._build_watchlist()
-        self._build_trades()
+       
         self._build_history()
 
 
@@ -221,36 +221,6 @@ class TradeFriendDashboard(ttk.Frame):
             pady=6
         )
 
-    def _build_trades(self):
-
-        search_bar = ttk.Frame(self.trades_tab)
-        search_bar.pack(fill="x", padx=6, pady=4)
-    
-        ttk.Label(search_bar, text="🔍 Search:").pack(side="left")
-    
-        search_entry = ttk.Entry(
-            search_bar,
-            textvariable=self.trades_search_var,
-            width=30
-        )
-        search_entry.pack(side="left", padx=5)
-        search_entry.bind("<KeyRelease>", self._filter_active_trades)
-
-        cols = (
-           "symbol", "entry", "ltp", "sl", "target",
-            "init_qty","rem_qty", "pnl", "r", "progress", "status"
-        )
-        self.trades_table = ttk.Treeview(
-            self.trades_tab, columns=cols, show="headings"
-        )
-        for c in cols:
-            self.trades_table.heading(c, text=c.upper())
-            self.trades_table.column(c, width=95, anchor="center")
-
-        self.trades_table.tag_configure("profit", foreground="green")
-        self.trades_table.tag_configure("loss", foreground="red")
-        self.trades_table.tag_configure("near", foreground="orange")
-        self.trades_table.pack(fill="both", expand=True, padx=6, pady=6)
 
     def _build_history(self):
         cols = (
@@ -319,8 +289,7 @@ class TradeFriendDashboard(ttk.Frame):
             # 🟣 WATCHLIST TAB → NOW SHOWS SWING PLANS
             self.after(0, lambda: self._update_watchlist(plan_trades))
 
-            # 🟢 ACTIVE TRADES
-            self.after(0, lambda: self._update_active_trades(active))
+           
 
             # 🔵 HISTORY
             self.after(0, lambda: self._update_history(history))
@@ -394,78 +363,6 @@ class TradeFriendDashboard(ttk.Frame):
                    f"error={e}"
                )
 
-    def _update_active_trades(self, active_trades):
-        """
-        Update Active Trades table.
-    
-        Rules:
-        - DB provides FACTS only
-        - LTP, PnL, R, Progress computed at runtime
-        - TradeFriendTradeViewService is single source of truth
-        """
-    
-        # 🔐 Safety
-        if not hasattr(self, "trades_table"):
-            return
-    
-        # 🧠 Cache for search/filter
-        self._active_trades_cache = active_trades or []
-    
-        # 🎨 Render UI
-        self._render_active_trades(self._active_trades_cache)
-    
-    
-    def _render_active_trades(self, active_trades):
-        """
-        Pure UI renderer for Active Trades table.
-        No DB calls. No business logic.
-        """
-    
-        self.trades_table.delete(*self.trades_table.get_children())
-    
-        for trade in active_trades:
-            try:
-                # -------------------------------
-                # Normalize sqlite3.Row → dict
-                # -------------------------------
-                trade = dict(trade)
-    
-                symbol = trade.get("symbol")
-                if not symbol:
-                    continue
-                
-                # -------------------------------
-                # Fetch LTP (cached)
-                # -------------------------------
-                ltp = self._get_ltp_cached(symbol)
-    
-                # -------------------------------
-                # Build UI row (SINGLE AUTHORITY)
-                # -------------------------------
-                row = TradeFriendTradeViewService.active_trade_row(
-                    trade=trade,
-                    ltp=ltp
-                )
-    
-                # -------------------------------
-                # Insert into table
-                # -------------------------------
-                self.trades_table.insert(
-                    "",
-                    "end",
-                    values=row["values"],
-                    tags=(row.get("tag"),)
-                )
-    
-            except Exception as e:
-                logger.error(
-                    f"❌ Active trade render failed | "
-                    f"symbol={trade.get('symbol') if isinstance(trade, dict) else 'N/A'} | "
-                    f"error={e}"
-                )
-
-
-
     def _update_history(self, trades):
         self.history_table.delete(*self.history_table.get_children())
         for t in trades:
@@ -494,20 +391,6 @@ class TradeFriendDashboard(ttk.Frame):
 
         self._render_watchlist(filtered)
 
-    def _filter_active_trades(self, event=None):
-        query = self.trades_search_var.get().lower().strip()
-
-        if not query:
-            self._render_active_trades(self._active_trades_cache)
-            return
-
-        filtered = [
-            r for r in self._active_trades_cache
-            if query in str(dict(r).get("symbol", "")).lower()
-            or query in str(dict(r).get("status", "")).lower()
-        ]
-
-        self._render_active_trades(filtered)
 
     # =====================================================
     # KPI

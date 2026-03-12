@@ -181,6 +181,13 @@ class AngelClient:
                     columns=["datetime", "open", "high", "low", "close", "volume"],
                 )
                 df["datetime"] = pd.to_datetime(df["datetime"])
+                logger.info(
+                    f"📊 {symbol} ({token}) → Historical fetched | "
+                    f"candles={len(df)} | "
+                    f"from={df['datetime'].min()} | "
+                    f"to={df['datetime'].max()} | "
+                    f"interval={interval}"
+                )
                 return df
 
             except Exception as e:

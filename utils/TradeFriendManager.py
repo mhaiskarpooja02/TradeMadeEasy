@@ -2,11 +2,14 @@
 
 import logging
 from Servieces.TradeFriendBrokerReconciliationService import TradeFriendBrokerReconciliationService
+from Servieces.TradeFriendCleanupService import TradeFriendCleanupService
 from core.TradeFriendDecisionRunner import TradeFriendDecisionRunner
 from core.TradeFriendSwingTradeMonitor import TradeFriendSwingTradeMonitor
 from core.TradeFriendWatchlistEngine import WatchlistEngine
 
-
+from pathlib import Path
+from datetime import datetime
+import shutil
 from core.TradeFriendSwingTriggerEngine import TradeFriendSwingTriggerEngine
 from db.TradeFriendSettingsRepo import TradeFriendSettingsRepo
 from reports.entry_execution.TradeFriendEntryExecutionReportService import TradeFriendEntryExecutionReportService
@@ -108,3 +111,24 @@ class TradeFriendManager:
         service.run()
     
         logger.info("✅ TradeFriend Reconciliation completed")
+
+
+        
+    # ----------------------------------------------
+    # 🧹 DAILY CLEANUP SERVICE
+    # ----------------------------------------------
+    
+    def tf_daily_cleanup(self, base_path=".", keep_days=4):
+        """
+        Delegates cleanup to TradeFriendCleanupService
+        """
+    
+        logger.info("🧹 Triggering TradeFriend Cleanup Service")
+    
+        try:
+            cleanup_service = TradeFriendCleanupService()
+            cleanup_service.run(base_path=base_path, keep_days=keep_days)
+    
+        except Exception:
+            logger.exception("❌ Cleanup service execution failed")
+    

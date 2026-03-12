@@ -24,7 +24,9 @@ class TradeFriendConfidenceScorer:
             "Mid-Band Support",
             "Upper Band Expansion",
             "EMA20",
-            "VWAP"
+            "VWAP",
+            "EMA Pullback",
+            "30D Breakout"
         ):
             score += 2
 

@@ -206,7 +206,19 @@ class TradeFriendExitOrderService:
             logger.error(
                 f"❌ EXIT BLOCKED | No active broker position | trade_id={trade_id}"
             )
-            return False
+            # Directly finalize from DB state
+            self._finalize_exit(
+                trade=trade,
+                exit_qty=exit_qty,
+                exit_reason=f"{exit_reason}_FORCED",
+                exit_price=exit_price or float(trade["entry"]),
+                order_mode="SYSTEM",
+                broker_order_id=None
+            )
+
+            return True
+
+
 
         # Restrict brokers to entry broker first
         entry_brokers = {
@@ -218,6 +230,9 @@ class TradeFriendExitOrderService:
         # ===============================
         cfg = self.config_repo.get()
         order_mode = cfg["order_mode"]
+
+        
+        order_mode = active_entry_positions[0]["order_mode"]
 
         side = "SELL" if trade["side"] == "BUY" else "BUY"
 

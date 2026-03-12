@@ -22,7 +22,6 @@ class TradeFriendOrderRepo:
         self._apply_pragmas()
         self._create_table()
         self._create_indexes()
-        self._apply_migrations()
 
     # ======================================================
     def _apply_pragmas(self):
@@ -30,73 +29,49 @@ class TradeFriendOrderRepo:
         self.conn.execute("PRAGMA synchronous=NORMAL;")
 
     # ======================================================
-    # TABLE
+    # TABLE (CLEAN DESIGN)
     # ======================================================
     def _create_table(self):
+
         self.cur.execute("""
             CREATE TABLE IF NOT EXISTS tradefriend_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 trade_id INTEGER NOT NULL,
                 broker TEXT NOT NULL,
+
                 broker_order_id TEXT NOT NULL,
+                broker_unique_id TEXT,
+
                 leg_type TEXT NOT NULL,
                 order_mode TEXT NOT NULL,
                 side TEXT NOT NULL,
                 qty INTEGER NOT NULL,
+
                 filled_qty INTEGER DEFAULT 0,
                 avg_price REAL DEFAULT 0,
                 status TEXT NOT NULL,
+
                 rejection_reason TEXT,
+
                 recon_retry_count INTEGER DEFAULT 0,
                 recon_error TEXT,
                 last_reconciled_at TEXT,
+
                 created_on TEXT NOT NULL,
-                updated_on TEXT NOT NULL,
-                UNIQUE(trade_id, broker_order_id)
+                updated_on TEXT NOT NULL
             )
         """)
-        self.conn.commit()
-
-    # ======================================================
-    # MIGRATIONS (safe alter if upgrading)
-    # ======================================================
-    def _apply_migrations(self):
-
-        columns = [
-            "rejection_reason",
-            "recon_retry_count",
-            "recon_error",
-            "last_reconciled_at"
-        ]
-
-        existing_cols = [
-            r["name"]
-            for r in self.cur.execute(
-                "PRAGMA table_info(tradefriend_orders)"
-            ).fetchall()
-        ]
-
-        for col in columns:
-            if col not in existing_cols:
-                self.cur.execute(
-                    f"ALTER TABLE tradefriend_orders ADD COLUMN {col} TEXT"
-                )
 
         self.conn.commit()
-
     # ======================================================
     # INDEXES
     # ======================================================
     def _create_indexes(self):
 
         self.cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_orders_trade_status
-            ON tradefriend_orders (trade_id, status)
-        """)
-
-        self.cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_orders_broker_order
-            ON tradefriend_orders (broker_order_id)
+            CREATE INDEX IF NOT EXISTS idx_orders_trade
+            ON tradefriend_orders (trade_id)
         """)
 
         self.cur.execute("""
@@ -104,55 +79,75 @@ class TradeFriendOrderRepo:
             ON tradefriend_orders (status)
         """)
 
+        self.cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_orders_broker
+            ON tradefriend_orders (broker)
+        """)
+
+        self.cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_orders_broker_unique
+            ON tradefriend_orders (broker_unique_id)
+        """)
+
         self.conn.commit()
 
     # ======================================================
-    # INSERT ORDER
+    # INSERT ORDER (SAFE VERSION)
     # ======================================================
     def insert_order(
         self,
         trade_id: int,
         broker: str,
         broker_order_id: str,
+        broker_unique_id: str | None,
         leg_type: str,
         order_mode: str,
         side: str,
         qty: int
     ) -> int:
-
+    
         now = datetime.utcnow().isoformat()
-
-        self.cur.execute("""
-            INSERT OR IGNORE INTO tradefriend_orders (
+    
+        with self.conn:  # transaction-safe
+        
+            # 1️⃣ Check if already exists
+            existing_id = self.fetch_by_broker_order_id(broker_order_id)
+    
+            if existing_id:
+                return existing_id
+    
+            # 2️⃣ Insert new record
+            self.cur.execute("""
+                INSERT INTO tradefriend_orders (
+                    trade_id,
+                    broker,
+                    broker_order_id,
+                    broker_unique_id,
+                    leg_type,
+                    order_mode,
+                    side,
+                    qty,
+                    status,
+                    created_on,
+                    updated_on
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
                 trade_id,
                 broker,
                 broker_order_id,
+                broker_unique_id,
                 leg_type,
                 order_mode,
                 side,
                 qty,
-                status,
-                created_on,
-                updated_on
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            trade_id,
-            broker,
-            broker_order_id,
-            leg_type,
-            order_mode,
-            side,
-            qty,
-            "PLACED",
-            now,
-            now
-        ))
-
-        self.conn.commit()
-        return self.cur.lastrowid
-
+                "PLACED",
+                now,
+                now
+            ))
+    
+            return self.cur.lastrowid
     # ======================================================
-    # FETCH OPEN ORDERS (with retry protection)
+    # FETCH OPEN ORDERS
     # ======================================================
     def fetch_open_orders(self):
 
@@ -160,7 +155,7 @@ class TradeFriendOrderRepo:
             SELECT *
             FROM tradefriend_orders
             WHERE status IN ('PLACED', 'PARTIAL')
-              AND (recon_retry_count IS NULL OR recon_retry_count < 5)
+              AND recon_retry_count < 5
         """).fetchall()
 
         return [dict(r) for r in rows]
@@ -231,7 +226,7 @@ class TradeFriendOrderRepo:
 
         self.cur.execute("""
             UPDATE tradefriend_orders
-            SET recon_retry_count = COALESCE(recon_retry_count, 0) + 1,
+            SET recon_retry_count = recon_retry_count + 1,
                 recon_error = ?,
                 last_reconciled_at = ?,
                 updated_on = ?
@@ -286,7 +281,21 @@ class TradeFriendOrderRepo:
         self.conn.commit()
 
     # ======================================================
-    # CLOSE CONNECTION (Optional)
+    # FETCH BY BROKER ORDER ID
+    # ======================================================
+    def fetch_by_broker_order_id(self, broker_order_id: str):
+
+        row = self.cur.execute("""
+            SELECT id
+            FROM tradefriend_orders
+            WHERE broker_order_id = ?
+            LIMIT 1
+        """, (broker_order_id,)).fetchone()
+
+        return row["id"] if row else None
+
+    # ======================================================
+    # CLOSE
     # ======================================================
     def close(self):
         self.conn.close()

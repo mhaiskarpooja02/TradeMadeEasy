@@ -159,34 +159,65 @@ class TradeFriendOrderManagementService:
 
                 # Broker ACCEPTED order
                 if result.success and result.broker_order_id:
-
+                
+                    logger.info(
+                        f"🟢 Broker success | trade_id={trade_id} | "
+                        f"broker={broker_name} | order_id={result.broker_order_id}"
+                    )
+                
                     self.broker_repo.mark_order_success(
                         broker_trade_id=broker_trade_id,
                         broker_order_id=result.broker_order_id,
                         response_payload=result.raw_response
                     )
-
-                    self.order_repo.insert_order(
-                        trade_id=trade_id,
-                        broker=broker_name,
-                        broker_order_id=result.broker_order_id,
-                        leg_type="ENTRY",
-                        order_mode="LIVE",
-                        side=side,
-                        qty=qty
+                
+                    # 🔥 ADD THIS LOG
+                    logger.info(
+                        f"💾 Attempting DB insert | trade_id={trade_id} | "
+                        f"order_id={result.broker_order_id}"
                     )
-
+                
+                    try:
+                        order_db_id = self.order_repo.insert_order(
+                            trade_id=trade_id,
+                            broker=broker_name,
+                            broker_order_id=result.broker_order_id,
+                            broker_unique_id=result.unique_order_id,
+                            leg_type="ENTRY",
+                            order_mode="LIVE",
+                            side=side,
+                            qty=qty
+                        )
+                
+                        logger.info(
+                            f"✅ DB Insert SUCCESS | db_id={order_db_id} | "
+                            f"order_id={result.broker_order_id}"
+                        )
+                
+                    except Exception as e:
+                        logger.error(
+                            f"❌ DB Insert FAILED | trade_id={trade_id} | "
+                            f"order_id={result.broker_order_id} | error={str(e)}",
+                            exc_info=True
+                        )
+                        raise  # optional but recommended
+                    
                     executions.append({
                         "broker": broker_name,
                         "broker_trade_id": broker_trade_id,
                         "broker_order_id": result.broker_order_id
                     })
-
+                
                     self.audit_repo.log_result(audit_id, "SUCCESS", {})
-
+                
                     return executions
-
+                
                 else:
+                    logger.warning(
+                        f"🔴 Broker rejected | trade_id={trade_id} | "
+                        f"error={result.error}"
+                    )
+                
                     self.broker_repo.mark_order_failed(
                         broker_trade_id,
                         result.error or "Rejected"

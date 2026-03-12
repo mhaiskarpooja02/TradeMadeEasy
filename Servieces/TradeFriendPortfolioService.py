@@ -44,7 +44,7 @@ class TradeFriendPortfolioService:
     # ==========================================================
     # PUBLIC: Full Snapshot (Home + Dashboard)
     # ==========================================================
-    def get_portfolio_snapshot(self, limit=10):
+    def get_portfolio_snapshot(self, limit=50):
 
         rows = self._build_active_rows()
 
@@ -92,7 +92,7 @@ class TradeFriendPortfolioService:
     def get_active_trade_rows(self):
         return self._build_active_rows()
 
-    def get_top_movers(self, limit=10):
+    def get_top_movers(self, limit=100):
         snapshot = self.get_portfolio_snapshot(limit)
         return snapshot["gainers"], snapshot["losers"]
 

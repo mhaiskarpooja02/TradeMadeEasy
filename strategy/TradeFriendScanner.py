@@ -25,7 +25,7 @@ class TradeFriendScanner:
         # -----------------------------
         # SAFETY CHECK
         # -----------------------------
-        if df.empty or len(df) < 220:
+        if df.empty or len(df) < 120:
             logger.info(f"{self.symbol} → Skipped (insufficient data)")
             return None
 
@@ -37,7 +37,7 @@ class TradeFriendScanner:
         # -----------------------------
         df["ema_20"] = talib.EMA(close, 20)
         df["ema_50"] = talib.EMA(close, 50)
-        df["ema_200"] = talib.EMA(close, 200)
+        df["ema_200"] = talib.EMA(close, 100)
 
         df["adx"] = talib.ADX(df["high"], df["low"], close, 14)
         df["rsi"] = talib.RSI(close, 14)

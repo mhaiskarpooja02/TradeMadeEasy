@@ -134,11 +134,20 @@ class TradeFriendHome(ttk.Frame):
             "pnl_percent": "PnL %"
         }
 
-        for col in columns:
+        # ✅ SET HEADERS
+        for col in headings:
             tree.heading(col, text=headings[col])
-            tree.column(col, anchor="center", width=90)
+            tree.column(col, anchor="center")
 
-        tree.column("symbol", width=120)
+
+        tree.column("symbol", width=110)
+        tree.column("entry", width=70)
+        tree.column("ltp", width=70)
+        tree.column("qty", width=50)
+        tree.column("pnl", width=70)
+        tree.column("pnl_percent", width=70)
+
+        
 
          # ✅ COLOR TAGS
         tree.tag_configure("profit", foreground="green")

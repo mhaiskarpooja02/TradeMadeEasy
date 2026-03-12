@@ -6,21 +6,21 @@ TradeFriendAngelOrderAdapter
 
 from core.TradeFriendDataProvider import TradeFriendDataProvider
 from models.tradefriend_execution_result import TradeFriendExecutionResult
-from utils.logger import get_brokerorder_logger
+from utils.logger import get_angel_rest_logger, get_brokerorder_logger
 from db.TradeFriendStocMasterRepo import TradeFriendStocMasterRepo
 from brokers.angel_orderclient import init_client
-
+logger = get_angel_rest_logger()
 
 class TradeFriendAngelOrderAdapter:
 
     # ==========================================================================
     def __init__(self):
-        self.logger = get_brokerorder_logger()
+        
         self.stockmaster_repo = TradeFriendStocMasterRepo()
         self.client = init_client()
         self.data_provider = TradeFriendDataProvider()
 
-        self.logger.info("Angel Order Adapter initialized")
+        logger.info("Angel Order Adapter initialized")
 
     # ==========================================================================
     # SYMBOL RESOLUTION
@@ -32,13 +32,13 @@ class TradeFriendAngelOrderAdapter:
 
             for row in rows:
                 if row["symbol"] == symbol:
-                    self.logger.info("=" * 60)
-                    self.logger.info("🔎 ANGEL SYMBOL RESOLUTION")
-                    self.logger.info(f"Symbol          : {row['symbol']}")
-                    self.logger.info(f"Trading Symbol  : {row['trading_symbol']}")
-                    self.logger.info(f"Token           : {row['token']}")
-                    self.logger.info(f"Exchange        : NSE")
-                    self.logger.info("=" * 60)
+                    logger.info("=" * 60)
+                    logger.info("🔎 ANGEL SYMBOL RESOLUTION")
+                    logger.info(f"Symbol          : {row['symbol']}")
+                    logger.info(f"Trading Symbol  : {row['trading_symbol']}")
+                    logger.info(f"Token           : {row['token']}")
+                    logger.info(f"Exchange        : NSE")
+                    logger.info("=" * 60)
                     return {
                         "symbol": row["symbol"],
                         "trading_symbol": row["trading_symbol"],
@@ -46,11 +46,11 @@ class TradeFriendAngelOrderAdapter:
                         "exchange": "NSE"
                     }
 
-            self.logger.error(f"❌ Symbol not found in StockMaster: {symbol}")
+            logger.error(f"❌ Symbol not found in StockMaster: {symbol}")
             return None
 
         except Exception as e:
-            self.logger.exception(
+            logger.exception(
                 f"❌ Symbol resolution failed for {symbol} | Error: {e}"
             )
             return None
@@ -61,7 +61,7 @@ class TradeFriendAngelOrderAdapter:
     def place_order(self, order_request) -> TradeFriendExecutionResult:
 
         try:
-            self.logger.info(
+            logger.info(
                 f"📤 Angel place_order | "
                 f"trade_id={order_request.trade_id} | "
                 f"symbol={order_request.symbol} | "
@@ -83,7 +83,7 @@ class TradeFriendAngelOrderAdapter:
             # PAPER MODE
             # ----------------------------------------------------------
             if order_mode == "PAPER":
-                self.logger.info(f"📝 PAPER ORDER simulated | {symbol}")
+                logger.info(f"📝 PAPER ORDER simulated | {symbol}")
 
                 return TradeFriendExecutionResult(
                     success=True,
@@ -134,7 +134,7 @@ class TradeFriendAngelOrderAdapter:
             if tag:
                 angel_payload["tag"] = tag
 
-            self.logger.info(f"📦 Angel Payload → {angel_payload}")
+            logger.info(f"📦 Angel Payload → {angel_payload}")
 
             # ----------------------------------------------------------
             # Broker Call
@@ -145,18 +145,18 @@ class TradeFriendAngelOrderAdapter:
             order_id = response["order_id"]
             unique_id = response["unique_order_id"]
 
-            self.logger.info(f"✅ Angel Order Placed | OrderID={order_id}")
+            logger.info(f"✅ Angel Order Placed | OrderID={order_id}")
 
             return TradeFriendExecutionResult(
                 success=True,
                 broker_order_id=order_id,
-                unique_order_id=order_id,
+                unique_order_id=unique_id,
                 error=None
             )
 
         except Exception as e:
 
-            self.logger.error(
+            logger.error(
                 f"❌ Angel Order FAILED | "
                 f"trade_id={getattr(order_request, 'trade_id', None)} | "
                 f"error={str(e)}",
@@ -179,7 +179,7 @@ class TradeFriendAngelOrderAdapter:
     # ==========================================================================
     # ORDER STATUS FETCH (ABSTRACTION LAYER)
     # ==========================================================================
-    def get_order_status(self, broker_order_id: str) -> dict:
+    def get_order_status(self, broker_order_id: str, broker_unique_id: str = None) -> dict:
         """
         Fetch order status from Angel
         Returns normalized structure
@@ -187,11 +187,14 @@ class TradeFriendAngelOrderAdapter:
         """
 
         try:
-            self.logger.info(
-                f"🔎 [ANGEL] Fetching order status | {broker_order_id}"
+            if not broker_unique_id:
+                raise Exception("Angel requires unique_order_id")
+
+            logger.info(
+                f"🔎 [ANGEL] Fetching order status | unique_id={broker_unique_id}"
             )
 
-            response = self.client.get_order_status(broker_order_id)
+            response = self.client.get_order_status(broker_unique_id)
 
             if not response:
                 raise Exception("Empty response from broker")
@@ -215,7 +218,7 @@ class TradeFriendAngelOrderAdapter:
             else:
                 status = "PLACED"
 
-            self.logger.info(
+            logger.info(
                 f"📊 [ANGEL] Status={status} | Filled={filled_qty} | Avg={avg_price}"
             )
 
@@ -228,7 +231,7 @@ class TradeFriendAngelOrderAdapter:
             }
 
         except Exception as e:
-            self.logger.error(
+            logger.error(
                 f"❌ [ANGEL] Status fetch failed | "
                 f"{broker_order_id} | {str(e)}"
             )

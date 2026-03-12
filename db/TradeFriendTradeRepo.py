@@ -71,47 +71,61 @@ class TradeFriendTradeRepo:
     # -------------------------------------------------
     # CREATE TRADE (NO CAPITAL LOCKING HERE)
     # -------------------------------------------------
-    def save_trade(self, trade: dict) -> int:
+    def save_trade(self, trade: dict) -> int | None:
         """
         Creates a new trade record.
     
-        IMPORTANT:
-        - This method does NOT adjust capital.
-        - Capital is deducted only after confirmed broker fill.
+        Features:
+        - Prevents duplicate ACTIVE trades for same symbol
+        - Atomic insert (no race condition)
+        - Logs duplicate rejection
+        - Returns trade_id if created else None
         """
     
         position_value = trade["entry"] * trade["qty"]
         risk_amount = abs(trade["entry"] - trade["sl"]) * trade["qty"]
     
         try:
+        
             self.cursor.execute("""
-                INSERT INTO tradefriend_trades (
-                    swing_plan_id,
-                    symbol,
-                    side,
-                    planned_entry,
-                    entry,
-                    sl,
-                    trailing_sl,
-                    target,
-                    qty,
-                    initial_qty,
-                    remaining_qty,
-                    position_value,
-                    risk_amount,
-                    confidence,
-                    status,
-                    hold_mode,
-                    entry_day,
-                    created_on
+            INSERT INTO tradefriend_trades (
+                swing_plan_id,
+                symbol,
+                side,
+                planned_entry,
+                entry,
+                sl,
+                trailing_sl,
+                target,
+                qty,
+                initial_qty,
+                remaining_qty,
+                position_value,
+                risk_amount,
+                confidence,
+                status,
+                hold_mode,
+                entry_day,
+                created_on
+            )
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM tradefriend_trades
+                WHERE symbol = ?
+                AND status IN (
+                    'READY',
+                    'ENTRY_IN_PROGRESS',
+                    'OPEN',
+                    'PARTIAL'
                 )
-                VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                )
+            )
             """, (
+            
                 trade["swing_plan_id"],
                 trade["symbol"],
                 trade.get("side", "BUY"),
+    
                 trade["planned_entry"],
                 trade["entry"],
                 trade["sl"],
@@ -124,20 +138,55 @@ class TradeFriendTradeRepo:
     
                 position_value,
                 risk_amount,
+    
                 trade.get("confidence", 0),
                 trade.get("status", "READY"),
                 trade.get("hold_mode", 0),
+    
                 date.today().isoformat(),
-                datetime.now().isoformat()
+                datetime.now().isoformat(),
+    
+                trade["symbol"]
             ))
     
+            # -------------------------------------------------
+            # Duplicate check
+            # -------------------------------------------------
+            if self.cursor.rowcount == 0:
+            
+                logger.warning(
+                    "🚫 Duplicate active trade blocked | symbol=%s | swing_plan_id=%s",
+                    trade["symbol"],
+                    trade["swing_plan_id"]
+                )
+    
+                return None
+    
             self.conn.commit()
-            return self.cursor.lastrowid
+    
+            trade_id = self.cursor.lastrowid
+    
+            logger.info(
+                "✅ Trade created | trade_id=%s | symbol=%s | qty=%s | entry=%s",
+                trade_id,
+                trade["symbol"],
+                trade["qty"],
+                trade["entry"]
+            )
+    
+            return trade_id
     
         except Exception as e:
+        
             self.conn.rollback()
+    
+            logger.exception(
+                "❌ Failed saving trade | symbol=%s | error=%s",
+                trade.get("symbol"),
+                str(e)
+            )
+    
             raise e
-
 
     # -------------------------------------------------
     # FETCH
@@ -163,7 +212,7 @@ class TradeFriendTradeRepo:
             SELECT 1
             FROM tradefriend_trades
             WHERE symbol = ?
-              AND status IN ('OPEN', 'PARTIAL')
+              AND status IN ( 'READY','ENTRY_IN_PROGRESS','OPEN', 'PARTIAL')
             LIMIT 1
         """, (symbol,)).fetchone()
         return row is not None
@@ -179,6 +228,12 @@ class TradeFriendTradeRepo:
        self.conn.commit()
 
        return self.cursor.rowcount == 1
+
+    def mark_confirmed(self, trade_id: int):
+        """
+        Mark READY trade as OPEN.
+        """
+        self.promote_if_ready(trade_id, "READY", "OPEN")
     # -------------------------------------------------
     # SL / TRAILING SL
     # -------------------------------------------------
@@ -287,21 +342,18 @@ class TradeFriendTradeRepo:
         if not trade:
             logger.warning(f"Close and archive failed | trade_id={trade_id} not found")
             return
-
-        filled_qty = trade["initial_qty"] - trade["remaining_qty"]
-        if filled_qty <= 0:
-            logger.warning(f"No capital to release for trade_id={trade_id}")
+    
+        closing_qty = trade["remaining_qty"]
+    
+        if closing_qty <= 0:
+            logger.warning(f"No open quantity for trade_id={trade_id}")
             return
-
-        # --------------------------
-        # 1️⃣ Release remaining capital
-        # --------------------------
+    
+        # Release capital
         released_capital = round(trade["position_value"], 2)
         self.settings_repo.adjust_available_swing_capital(released_capital)
-
-        # --------------------------
-        # 2️⃣ Archive full trade
-        # --------------------------
+    
+        # Archive trade
         self.history_repo.archive_trade(
             trade=trade,
             exit_price=exit_price,
@@ -309,22 +361,19 @@ class TradeFriendTradeRepo:
             closed_on=datetime.now().isoformat(),
             partial=False
         )
-
-        # --------------------------
-        # 3️⃣ Remove trade from active table
-        # --------------------------
+    
+        # Delete from active table
         self.cursor.execute(
             "DELETE FROM tradefriend_trades WHERE id = ?",
             (trade_id,)
         )
         self.conn.commit()
-
+    
         logger.info(
             f"✅ FULL EXIT | trade_id={trade_id} | "
-            f"qty={filled_qty} | exit_price={exit_price} | "
+            f"qty={closing_qty} | exit_price={exit_price} | "
             f"released_capital={released_capital} | reason={exit_reason}"
         )
-        
     # -------------------------------------------------
     # SYMBOL HELPERS
     # -------------------------------------------------
@@ -335,6 +384,27 @@ class TradeFriendTradeRepo:
             WHERE status IN ('OPEN', 'PARTIAL')
         """).fetchall()
         return {r["symbol"] for r in rows}
+    
+
+    def validate_existing_symbol(self, symbol: str) -> bool:
+        """
+        Returns True if symbol already has an ACTIVE trade.
+        """
+    
+        row = self.cursor.execute("""
+            SELECT 1
+            FROM tradefriend_trades
+            WHERE symbol = ?
+            AND status IN (
+                'READY',
+                'ENTRY_IN_PROGRESS',
+                'OPEN',
+                'PARTIAL'
+            )
+            LIMIT 1
+        """, (symbol,)).fetchone()
+    
+        return row is not None
     
     # -------------------------------------------------
     # fetch active Trade for Dashboard
@@ -533,6 +603,7 @@ class TradeFriendTradeRepo:
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         """, (avg_entry, entry_day, status, trade_id))
+        self.conn.commit()
 
 
     def update_hold_mode(self, trade_id: int, hold_mode: int):
@@ -552,7 +623,19 @@ class TradeFriendTradeRepo:
                 (hold_mode, trade_id)
             )
 
-
+    def delete_old_invalid_trades(self):
+        """
+        Deletes INVALID trades older than today.
+        These trades were filtered before execution
+        and are not required for analytics.
+        """
+        self.cursor.execute("""
+            DELETE FROM tradefriend_trades
+            WHERE status IN ('INVALID', 'SKIPPED', 'EXITED')
+              AND entry_day < DATE('now')
+              AND entry_day IS NOT NULL
+        """)
+        self.conn.commit()
 
     def update_status(self, trade_id: int, status: str):
         """
@@ -570,6 +653,45 @@ class TradeFriendTradeRepo:
         )
         self.conn.commit()
 
+    # --------------------------------------------------
+    # CLEANUP ACTIVE TRADES
+    # --------------------------------------------------
+    def cleanup_active_trades(self):
+
+        total_deleted = 0
+
+
+
+        # stale entries
+        cursor2 = self.conn.execute("""
+            DELETE FROM tradefriend_trades
+            WHERE status IN ('READY','ENTRY_IN_PROGRESS')
+            AND datetime(created_on) <= datetime('now','-7 days')
+        """)
+        total_deleted += cursor2.rowcount
+
+        self.conn.commit()
+
+        return total_deleted
+    
+    # --------------------------------------------------
+    # DELETE ORPHAN ACTIVE TRADES
+    # --------------------------------------------------
+    def delete_orphan_active_trades(self, valid_plan_ids):
+
+        if not valid_plan_ids:
+            return 0
+
+        placeholders = ",".join("?" * len(valid_plan_ids))
+
+        cursor = self.conn.execute(f"""
+            DELETE FROM tradefriend_trades
+            WHERE swing_plan_id NOT IN ({placeholders})
+        """, valid_plan_ids)
+
+        self.conn.commit()
+
+        return cursor.rowcount
 
     def rebuild_trade(self, trade: dict):
         self.cursor.execute("""

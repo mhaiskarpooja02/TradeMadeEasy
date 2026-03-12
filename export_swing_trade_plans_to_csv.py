@@ -219,9 +219,10 @@ def mark_all_non_expired_swing_plans_hold() -> int:
 # MANUAL RUN
 # --------------------------------------------------
 if __name__ == "__main__":
-   export_active_trade_symbols_csv()
+#    export_active_trade_symbols_csv()
     # cleanup_today_data()
      # export_tradefriend_trades_plans()
     # export_active_trade_symbols_csv()
-    #export_swing_trade_plans()
+    # export_swing_trade_plans()
     # mark_all_non_expired_swing_plans_hold()
+    export_active_trade_symbols_csv()

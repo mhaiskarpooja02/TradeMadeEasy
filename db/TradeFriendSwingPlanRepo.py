@@ -84,6 +84,28 @@ class TradeFriendSwingPlanRepo:
             return
 
         plan = dict(plan)
+
+        symbol = plan.get('symbol')
+
+        # ---------------------------------------------
+        # CHECK EXISTING ACTIVE PLAN
+        # ---------------------------------------------
+        existing = self.conn.execute("""
+            SELECT id, entry
+            FROM swing_trade_plans
+            WHERE symbol = ?
+            AND status IN ('PLANNED','HOLD','APPROVED')
+            LIMIT 1
+        """, (symbol,)).fetchone()
+
+        if existing:
+            print(f"⚠ Active plan already exists for {symbol} (plan_id={existing['id']})")
+            return
+
+        # ---------------------------------------------
+        # INSERT PLAN
+        # ---------------------------------------------
+
         target1 = plan.get("target1") or plan.get("target")
         if target1 is None:
             raise ValueError(f"Missing target for {plan.get('symbol')}")
@@ -120,7 +142,7 @@ class TradeFriendSwingPlanRepo:
         return self.conn.execute("""
             SELECT *
             FROM swing_trade_plans
-            WHERE status IN ('PLANNED', 'HOLD')
+            WHERE status IN ('PLANNED', 'HOLD', 'APPROVED')
             ORDER BY entry ASC, created_on ASC
         """).fetchall()
 
@@ -166,6 +188,24 @@ class TradeFriendSwingPlanRepo:
         self.conn.commit()
 
     # --------------------------------------------------
+    # EXPIRE OLD PLANS (STATUS-AGNOSTIC)
+    # --------------------------------------------------
+    def get_valid_plan_ids(self):
+        """
+        Returns all swing plan IDs that should still exist
+        in the trade system.
+        """
+        rows = self.conn.execute("""
+            SELECT id
+            FROM swing_trade_plans
+            WHERE status NOT IN ('EXPIRED','REJECTED')
+        """).fetchall()
+    
+        ids = [row["id"] for row in rows]
+    
+        return ids if ids else None
+
+    # --------------------------------------------------
     # MARK DECISION
     # --------------------------------------------------
     def mark_decision(self, plan_id: int, status: str):
@@ -188,6 +228,23 @@ class TradeFriendSwingPlanRepo:
         """)
         self.conn.commit()
 
+    # --------------------------------------------------
+    # CLEANUP OLD TERMINAL PLANS
+    # --------------------------------------------------
+    def cleanup_old_terminal_plans(self, days: int = 30):
+        """
+        Delete terminal plans (EXPIRED, TRIGGERED, REJECTED)
+        older than the specified number of days.
+        Default: 30 days
+        """
+
+        self.conn.execute(f"""
+            DELETE FROM swing_trade_plans
+            WHERE status IN ('EXPIRED','TRIGGERED','REJECTED')
+            AND datetime(created_on) <= datetime('now','-{days} days')
+        """)
+
+        self.conn.commit()
     # --------------------------------------------------
     # RESET
     # --------------------------------------------------

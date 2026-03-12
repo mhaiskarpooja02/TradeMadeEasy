@@ -54,7 +54,7 @@ with open(INDICATOR_FILE, "r") as f:
 EMA_SHORT = indicators.get("ema_short", 9)
 EMA_LONG = indicators.get("ema_long", 21)
 CANDLES_ABOVE = indicators.get("candles_above", 2)
-LOOKBACK_DAYS = indicators.get("lookback_days", 180)
+LOOKBACK_DAYS = indicators.get("lookback_days", 300)
 RangeBoundLOOKBACK_DAYS = indicators.get("RangeBoundlookback_days", 365)
 DEFAULT_INTERVAL = indicators.get("default_interval", "ONE_DAY")
 RSI_PERIOD = indicators.get("rsi_period", 14)

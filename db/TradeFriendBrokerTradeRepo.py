@@ -284,7 +284,24 @@ class TradeFriendBrokerTradeRepo:
         """, (symbol,)).fetchall()
     
         return [dict(r) for r in rows]
+
+    def deactivate_active_positions(self, trade_id: int):
+        """
+        Mark all OPEN broker ENTRY legs as CLOSED
+        after trade fully exits.
+        """
     
+        self.cur.execute("""
+            UPDATE tradefriend_broker_trades
+            SET position_status = 'CLOSED',
+                updated_on = ?
+            WHERE trade_id = ?
+              AND leg_type = 'ENTRY'
+              AND position_status IN ('OPEN', 'PARTIAL_EXIT')
+        """, (datetime.utcnow().isoformat(), trade_id))
+    
+        self.conn.commit()
+        
     # =====================================================
     # GENERIC FETCH UTILITY (FOR REPORTING / DEBUG)
     # =====================================================

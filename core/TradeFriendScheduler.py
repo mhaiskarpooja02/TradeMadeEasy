@@ -129,6 +129,13 @@ class TradeFriendScheduler:
                 # ----------------------------------------------
                 if self.is_daily_scan_time():
                     if self._last_scan_date != today:
+
+                        logger.info("🧹 Running daily cleanup")
+                        try:
+                            self.manager.tf_daily_cleanup()
+                        except Exception:
+                            logger.exception("❌ Cleanup failed")
+
                         logger.info("📅 Running daily scan")
                         self.manager.tf_daily_scan(self._get_trade_mode())
                         self._last_scan_date = today
